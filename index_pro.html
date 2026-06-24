@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ШТАБ — неоморфизм, прототип</title>
+<style>
+  :root{ --r-lg:22px; --r-md:16px; --r-sm:12px; --r-pill:999px; }
+  [data-theme="light"]{
+    --bg:#e4e7ec; --rd:#c4c8d2; --rl:#ffffff;
+    --ink:#2b3142; --ink-soft:#666d80; --ink-mut:#959cb0;
+    --accent:#5b7cfa; --accent-ink:#ffffff;
+    --ok:#2e9e5b; --danger:#e0574c; --warn:#c5870c;
+    --chip:#eef0f5; --ovl:rgba(40,46,64,.32);
+  }
+  [data-theme="dark"]{
+    --bg:#23262e; --rd:#191b21; --rl:#2f333d;
+    --ink:#d3d8e3; --ink-soft:#969cad; --ink-mut:#6f7585;
+    --accent:#7e9bff; --accent-ink:#0f131c;
+    --ok:#54c98a; --danger:#ff6f63; --warn:#e1aa3c;
+    --chip:#2a2e38; --ovl:rgba(0,0,0,.55);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;font-size:14px;line-height:1.5;padding:18px;transition:background .25s,color .25s}
+  .wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+
+  .topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .logo{background:var(--bg);border-radius:var(--r-md);padding:10px 16px;font-weight:700;letter-spacing:.06em;color:var(--accent);box-shadow:6px 6px 14px var(--rd),-6px -6px 14px var(--rl)}
+  .logo small{color:var(--ink-mut);font-weight:500;letter-spacing:0}
+  .seg{display:flex;gap:6px;background:var(--bg);padding:6px;border-radius:var(--r-pill);box-shadow:inset 5px 5px 11px var(--rd),inset -5px -5px 11px var(--rl);flex-wrap:wrap}
+  .seg button{border:0;background:transparent;color:var(--ink-soft);font:inherit;font-weight:500;padding:7px 14px;border-radius:var(--r-pill);cursor:pointer;transition:.15s}
+  .seg button.on{background:var(--bg);color:var(--accent);box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl)}
+  .spacer{flex:1}
+  .icon-btn{border:0;background:var(--bg);color:var(--ink-soft);width:42px;height:42px;border-radius:var(--r-md);cursor:pointer;font-size:16px;box-shadow:6px 6px 14px var(--rd),-6px -6px 14px var(--rl);transition:.12s}
+  .icon-btn:active{box-shadow:inset 4px 4px 9px var(--rd),inset -4px -4px 9px var(--rl)}
+
+  .card{background:var(--bg);border-radius:var(--r-lg);padding:18px;box-shadow:6px 6px 14px var(--rd),-6px -6px 14px var(--rl)}
+  .card h3{margin:0 0 14px;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-mut)}
+  .grid{display:grid;gap:16px}
+  .g-stats{grid-template-columns:repeat(4,1fr)} .g-main{grid-template-columns:1.4fr 1fr} .g-2{grid-template-columns:1fr 1fr}
+  @media(max-width:820px){.g-stats{grid-template-columns:1fr 1fr}.g-main,.g-2{grid-template-columns:1fr}}
+
+  .stat{background:var(--bg);border-radius:var(--r-md);padding:16px;box-shadow:6px 6px 14px var(--rd),-6px -6px 14px var(--rl)}
+  .stat .k{font-size:11px;color:var(--ink-mut);text-transform:uppercase;letter-spacing:.05em}
+  .stat .v{font-size:24px;font-weight:700;margin-top:6px}
+  .stat .v.accent{color:var(--accent)} .stat .v.ok{color:var(--ok)} .stat .v.danger{color:var(--danger)}
+  .stat .sub{font-size:11px;color:var(--ink-soft);margin-top:3px}
+
+  .pill{display:inline-flex;align-items:center;gap:5px;background:var(--chip);color:var(--ink-soft);padding:3px 10px;border-radius:var(--r-pill);font-size:11px;font-weight:600;white-space:nowrap}
+  .pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.danger{color:var(--danger)} .pill.accent{color:var(--accent)}
+  .cmt-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--accent);background:var(--chip);padding:3px 9px;border-radius:var(--r-pill);cursor:pointer}
+
+  .row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--r-md);background:var(--bg);box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl);margin-bottom:12px;cursor:pointer}
+  .row:last-child{margin-bottom:0}
+  .row .tm{font-variant-numeric:tabular-nums;font-weight:600;color:var(--accent);min-width:46px}
+  .row .main{flex:1;min-width:0}
+  .row .main b{font-weight:600}
+  .row .main .meta{font-size:12px;color:var(--ink-soft);margin-top:2px}
+
+  .btn{border:0;font:inherit;font-weight:600;cursor:pointer;border-radius:var(--r-sm);padding:9px 16px;background:var(--bg);color:var(--ink-soft);box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl);transition:.12s}
+  .btn:active{box-shadow:inset 3px 3px 7px var(--rd),inset -3px -3px 7px var(--rl)}
+  .btn.primary{background:var(--accent);color:var(--accent-ink);box-shadow:5px 5px 12px var(--rd),-3px -3px 10px var(--rl)}
+  .btn.sm{padding:6px 12px;font-size:12px}
+  .btn.danger{color:var(--danger)}
+
+  .search{display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--r-pill);padding:12px 18px;box-shadow:inset 5px 5px 11px var(--rd),inset -5px -5px 11px var(--rl);color:var(--ink-mut)}
+  .search input{border:0;background:transparent;outline:0;font:inherit;color:var(--ink);width:100%}
+
+  .stud{display:flex;align-items:center;gap:14px;padding:14px;border-radius:var(--r-md);background:var(--bg);box-shadow:5px 5px 12px var(--rd),-5px -5px 12px var(--rl)}
+  .ava{width:42px;height:42px;border-radius:50%;background:var(--bg);box-shadow:inset 3px 3px 7px var(--rd),inset -3px -3px 7px var(--rl);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--accent);flex:none}
+  .stud .nm{font-weight:600}.stud .sb{font-size:12px;color:var(--ink-soft)}
+
+  /* hourly schedule */
+  .hr{display:grid;grid-template-columns:54px 1fr;gap:12px;align-items:start;min-height:48px}
+  .hr .t{font-size:12px;color:var(--ink-mut);padding-top:8px;font-variant-numeric:tabular-nums}
+  .hr .lane{border-top:1px solid var(--chip);padding:6px 0;min-height:48px}
+  .ev{border-radius:var(--r-sm);padding:9px 13px;margin-bottom:6px;box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl);background:var(--bg);border-left:4px solid var(--accent);cursor:grab;display:flex;align-items:center;gap:10px}
+  .ev.busy{border-left-color:var(--ok)} .ev.warnc{border-left-color:var(--warn)}
+  .ev .evm{flex:1}.ev b{font-weight:600}.ev .meta{font-size:12px;color:var(--ink-soft);margin-top:2px}
+
+  /* kanban */
+  .kan{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  @media(max-width:820px){.kan{grid-template-columns:1fr 1fr}}
+  .col{background:var(--bg);border-radius:var(--r-md);padding:12px;box-shadow:inset 4px 4px 9px var(--rd),inset -4px -4px 9px var(--rl)}
+  .col h4{margin:0 0 11px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-mut);display:flex;justify-content:space-between}
+  .kc{background:var(--bg);border-radius:var(--r-sm);padding:11px;box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl);margin-bottom:10px;cursor:pointer}
+  .kc .kt{font-weight:600;font-size:13px}.kc .km{font-size:11px;color:var(--ink-soft);margin-top:3px}
+  .kc .kf{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap}
+
+  /* org */
+  .chk{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:var(--r-sm);background:var(--bg);box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl);margin-bottom:9px}
+  .box{width:20px;height:20px;border-radius:6px;background:var(--bg);box-shadow:inset 3px 3px 6px var(--rd),inset -3px -3px 6px var(--rl);flex:none;display:flex;align-items:center;justify-content:center;color:var(--ok);font-size:13px;font-weight:700}
+  .hbset{display:flex;gap:6px}.hb{width:24px;height:24px;border-radius:7px;background:var(--bg);box-shadow:inset 2px 2px 5px var(--rd),inset -2px -2px 5px var(--rl);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--ink-mut)}
+  .hb.on{box-shadow:3px 3px 7px var(--rd),-3px -3px 7px var(--rl);color:var(--accent)}
+
+  /* modal */
+  .ovl{position:fixed;inset:0;background:var(--ovl);display:none;align-items:flex-start;justify-content:center;padding:30px 16px;overflow:auto;z-index:20}
+  .ovl.on{display:flex}
+  .modal{background:var(--bg);border-radius:var(--r-lg);padding:22px;max-width:560px;width:100%;box-shadow:10px 10px 26px var(--rd),-10px -10px 26px var(--rl)}
+  .modal .mh{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+  .modal .mh .nm{font-size:18px;font-weight:700}
+  .fld{margin-bottom:13px}
+  .fld .l{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-mut);margin-bottom:6px}
+  .inp,textarea.inp{width:100%;border:0;background:var(--bg);color:var(--ink);font:inherit;border-radius:var(--r-sm);padding:11px 13px;box-shadow:inset 4px 4px 9px var(--rd),inset -4px -4px 9px var(--rl);outline:0}
+  textarea.inp{min-height:60px;resize:vertical}
+  .frow{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+  /* comments */
+  .cmts{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+  .cmt{background:var(--bg);border-radius:var(--r-sm);padding:11px 13px;box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl)}
+  .cmt .ch{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .cmt .cd{font-size:11px;color:var(--ink-mut)}
+  .cmt .ctag{font-size:10px;font-weight:600;color:var(--accent);background:var(--chip);padding:2px 8px;border-radius:var(--r-pill)}
+  .cmt .ctx{font-size:13px}
+  .cadd{display:flex;gap:9px;margin-top:12px;align-items:flex-start}
+  .cadd textarea{flex:1;min-height:42px}
+
+  /* charts */
+  .seg-mini{display:flex;gap:5px;background:var(--bg);padding:5px;border-radius:999px;box-shadow:inset 4px 4px 8px var(--rd),inset -4px -4px 8px var(--rl)}
+  .seg-mini button{border:0;background:transparent;font:inherit;font-size:11px;font-weight:600;color:var(--ink-soft);padding:5px 12px;border-radius:999px;cursor:pointer}
+  .seg-mini button.on{background:var(--bg);color:var(--accent);box-shadow:3px 3px 7px var(--rd),-3px -3px 7px var(--rl)}
+  .well{display:flex;align-items:flex-end;gap:9px;height:160px;padding:14px 12px 10px;border-radius:13px;box-shadow:inset 5px 5px 11px var(--rd),inset -5px -5px 11px var(--rl)}
+  .col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:5px}
+  .barv{font-size:10px;font-weight:600;color:var(--ink-soft);opacity:0;transition:opacity .4s}
+  .bar{width:100%;border-radius:7px 7px 4px 4px;background:var(--accent);box-shadow:3px 3px 7px var(--rd),-2px -2px 6px var(--rl);height:0;transition:height .7s cubic-bezier(.22,1,.36,1)}
+  .clbl{display:flex;gap:9px;margin-top:7px}.clbl span{flex:1;text-align:center;font-size:10px;color:var(--ink-mut)}
+  .ring{position:relative;width:128px;height:128px;margin:4px auto}
+  .ring .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .pc{font-size:24px;font-weight:700;color:var(--ok)}.ring .pl{font-size:10px;color:var(--ink-mut)}
+  .leg{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+  .li{display:flex;align-items:center;gap:8px;font-size:12px}.li b{margin-left:auto;font-variant-numeric:tabular-nums}
+  .swx{width:12px;height:12px;border-radius:4px;box-shadow:2px 2px 4px var(--rd),-2px -2px 4px var(--rl)}
+  .fn{display:flex;flex-direction:column;gap:9px}
+  .fnrow{display:flex;align-items:center;gap:10px}
+  .fnk{font-size:11px;color:var(--ink-soft);min-width:74px}
+  .fnbar{height:30px;border-radius:8px;background:var(--accent);box-shadow:3px 3px 7px var(--rd),-2px -2px 6px var(--rl);display:flex;align-items:center;padding:0 11px;color:var(--accent-ink);font-size:12px;font-weight:700;width:0;transition:width .8s cubic-bezier(.22,1,.36,1)}
+  /* sync */
+  .sw-tog{width:48px;height:27px;border-radius:999px;background:var(--bg);box-shadow:inset 3px 3px 6px var(--rd),inset -3px -3px 6px var(--rl);position:relative;cursor:pointer;flex:none}
+  .sw-tog .kn{position:absolute;top:3px;left:24px;width:21px;height:21px;border-radius:50%;background:var(--accent);box-shadow:2px 2px 5px var(--rd);transition:left .2s,background .2s}
+  .sw-tog.off .kn{left:3px;background:var(--ink-mut)}
+  .live{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:lv 2s ease-out infinite}
+  @keyframes lv{0%{box-shadow:0 0 0 0 rgba(46,158,91,.5)}70%{box-shadow:0 0 0 7px rgba(46,158,91,0)}100%{box-shadow:0 0 0 0 rgba(46,158,91,0)}}
+  .spin{display:inline-block;animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+  @media(prefers-reduced-motion:reduce){.bar,.fnbar{transition:none}.barv{transition:none;opacity:1}.live,.spin{animation:none}}
+  .screen{display:none}.screen.on{display:block}
+  .note{font-size:12px;color:var(--ink-mut);margin-top:8px}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--ink-soft)}
+  .sw{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:26px;height:26px;border-radius:8px;background:var(--bg);box-shadow:4px 4px 9px var(--rd),-4px -4px 9px var(--rl)}
+  .dot.in{box-shadow:inset 3px 3px 7px var(--rd),inset -3px -3px 7px var(--rl)} .dot.ac{background:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="logo">ШТАБ <small>.exe</small></div>
+    <div class="seg" id="seg">
+      <button class="on" data-s="today">Сегодня</button>
+      <button data-s="students">Ученики</button>
+      <button data-s="sched">Расписание</button>
+      <button data-s="orders">Заказы</button>
+      <button data-s="blog">Блог</button>
+      <button data-s="org">Орг</button>
+      <button data-s="analytics">Аналитика</button>
+      <button data-s="sync">Синхрон.</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="theme" title="Сменить тему">◐</button>
+  </div>
+
+  <!-- СЕГОДНЯ -->
+  <div class="screen on" data-screen="today">
+    <div class="grid g-stats" style="margin-bottom:18px">
+      <div class="stat"><div class="k">Доход за день</div><div class="v accent">6 400 ₽</div><div class="sub">из 8 занятий</div></div>
+      <div class="stat"><div class="k">Получено</div><div class="v ok">4 200 ₽</div><div class="sub">оплачено 5 из 8</div></div>
+      <div class="stat"><div class="k">Долг</div><div class="v danger">2 200 ₽</div><div class="sub">3 занятия</div></div>
+      <div class="stat"><div class="k">Заказы в работе</div><div class="v">4</div><div class="sub">2 дедлайна близко</div></div>
+    </div>
+    <div class="grid g-main">
+      <div class="card">
+        <h3>Занятия сегодня</h3>
+        <div class="row" onclick="openLesson()"><span class="tm">14:00</span><div class="main"><b>Алиса К., алгебра</b><div class="meta">9 класс, ОГЭ</div></div><span class="cmt-badge">💬 2</span><span class="pill ok">проведено</span></div>
+        <div class="row" onclick="openLesson()"><span class="tm">16:30</span><div class="main"><b>Пётр М., физика</b><div class="meta">оплата по факту</div></div><span class="cmt-badge">💬 1</span><span class="pill warn">долг 800 ₽</span></div>
+        <div class="row" onclick="openLesson()"><span class="tm">18:00</span><div class="main"><b>Группа РКИ, A2</b><div class="meta">4 человека</div></div><span class="pill accent">через 1 ч</span></div>
+        <div style="margin-top:14px;display:flex;gap:10px"><button class="btn primary" onclick="openLesson()">+ Занятие</button><button class="btn">+ Событие</button></div>
+        <div class="note">Редактор откроется поверх экрана и вернёт сюда же после сохранения. Значок 💬 показывает комментарии к занятию.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card">
+          <h3>Дедлайны</h3>
+          <div class="row"><span class="tm">2 дн</span><div class="main"><b>ВКР, глава 2</b><div class="meta">Кифанидис</div></div><span class="pill danger">скоро</span></div>
+          <div class="row"><span class="tm">5 дн</span><div class="main"><b>Статья ИТМО</b><div class="meta">на рецензии</div></div><span class="pill">в срок</span></div>
+        </div>
+        <div class="card">
+          <h3>Абонементы на исходе</h3>
+          <div class="row" onclick="openDossier()"><span class="tm" style="color:var(--danger)">0</span><div class="main"><b>Мария Л.</b><div class="meta">занятий не осталось</div></div><span class="pill danger">продлить</span></div>
+          <div class="row" onclick="openDossier()"><span class="tm" style="color:var(--warn)">2</span><div class="main"><b>Иван С.</b><div class="meta">осталось 2</div></div><span class="pill warn">скоро</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- УЧЕНИКИ -->
+  <div class="screen" data-screen="students">
+    <div class="search" style="margin-bottom:18px"><span>⌕</span><input placeholder="Поиск по ученикам, предмету, контакту..."></div>
+    <div class="grid g-2">
+      <div class="stud"><div class="ava">АК</div><div class="main" style="flex:1"><div class="nm">Алиса Краснова</div><div class="sb">алгебра, 9 класс · 1 200 ₽/зан</div></div><span class="cmt-badge" onclick="openDossier()">💬 5</span><button class="btn sm" onclick="openDossier()">Досье</button></div>
+      <div class="stud"><div class="ava">ПМ</div><div class="main" style="flex:1"><div class="nm">Пётр Морозов</div><div class="sb">физика, 11 класс · ЕГЭ</div></div><span class="cmt-badge" onclick="openDossier()">💬 3</span><button class="btn sm" onclick="openDossier()">Досье</button></div>
+      <div class="stud"><div class="ava">МЛ</div><div class="main" style="flex:1"><div class="nm">Мария Лебедева</div><div class="sb">РКИ, A2 · абонемент закончился</div></div><button class="btn sm" onclick="openDossier()">Досье</button></div>
+      <div class="stud"><div class="ava">ИС</div><div class="main" style="flex:1"><div class="nm">Иван Соколов</div><div class="sb">литература · ВПР</div></div><button class="btn sm" onclick="openDossier()">Досье</button></div>
+      <div class="stud"><div class="ava">ЕВ</div><div class="main" style="flex:1"><div class="nm">Елена Воронова</div><div class="sb">русский, 8 класс</div></div><button class="btn sm" onclick="openDossier()">Досье</button></div>
+      <div class="stud"><div class="ava">ДК</div><div class="main" style="flex:1"><div class="nm">Дмитрий Котов</div><div class="sb">обществознание · ЕГЭ</div></div><button class="btn sm" onclick="openDossier()">Досье</button></div>
+    </div>
+    <div style="margin-top:18px"><button class="btn primary">+ Новый ученик</button></div>
+  </div>
+
+  <!-- РАСПИСАНИЕ -->
+  <div class="screen" data-screen="sched">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="icon-btn" style="width:36px;height:36px;font-size:14px">‹</button>
+        <b style="font-size:16px">Понедельник, 22 июня</b>
+        <button class="icon-btn" style="width:36px;height:36px;font-size:14px">›</button>
+        <div class="spacer"></div>
+        <div class="seg" style="padding:5px"><button class="on" style="padding:6px 12px">День</button><button style="padding:6px 12px">Неделя</button><button style="padding:6px 12px">Месяц</button></div>
+      </div>
+      <div>
+        <div class="hr"><div class="t">11:00</div><div class="lane"><div class="ev" onclick="openLesson()"><div class="evm"><b>Елена В., русский</b><div class="meta">11:00–12:00 · 8 класс</div></div><span class="cmt-badge">💬 1</span></div></div></div>
+        <div class="hr"><div class="t">12:00</div><div class="lane"></div></div>
+        <div class="hr"><div class="t">13:00</div><div class="lane"></div></div>
+        <div class="hr"><div class="t">14:00</div><div class="lane"><div class="ev busy" onclick="openLesson()"><div class="evm"><b>Алиса К., алгебра</b><div class="meta">14:00–15:00 · проведено</div></div><span class="cmt-badge">💬 2</span></div></div></div>
+        <div class="hr"><div class="t">15:00</div><div class="lane"></div></div>
+        <div class="hr"><div class="t">16:00</div><div class="lane"><div class="ev warnc" onclick="openLesson()"><div class="evm"><b>Пётр М., физика</b><div class="meta">16:30–17:30 · долг 800 ₽</div></div><span class="cmt-badge">💬 1</span></div></div></div>
+        <div class="hr"><div class="t">17:00</div><div class="lane"></div></div>
+        <div class="hr"><div class="t">18:00</div><div class="lane"><div class="ev" onclick="openLesson()"><div class="evm"><b>Группа РКИ, A2</b><div class="meta">18:00–19:30 · 4 человека</div></div></div></div></div>
+      </div>
+      <div class="note">Карточки перетаскиваются по часам и дням мышью или пальцем, дата и время меняются без потери остальных полей. Тап по карточке открывает занятие с комментариями.</div>
+    </div>
+  </div>
+
+  <!-- ЗАКАЗЫ -->
+  <div class="screen" data-screen="orders">
+    <div class="kan">
+      <div class="col"><h4>Новый <span>2</span></h4>
+        <div class="kc" onclick="openLesson()"><div class="kt">ВКР, экономика</div><div class="km">Байгузова · 18 000 ₽</div><div class="kf"><span class="pill warn">дедлайн 12 дн</span><span class="cmt-badge">💬 1</span></div></div>
+        <div class="kc"><div class="kt">Курсовая, право</div><div class="km">новый клиент · 6 500 ₽</div><div class="kf"><span class="pill">оценка</span></div></div>
+      </div>
+      <div class="col"><h4>В работе <span>3</span></h4>
+        <div class="kc" onclick="openLesson()"><div class="kt">ВКР, глава 2</div><div class="km">Кифанидис · 24 000 ₽</div><div class="kf"><span class="pill danger">дедлайн 2 дн</span><span class="cmt-badge">💬 4</span></div></div>
+        <div class="kc"><div class="kt">Презентация, МГИМО</div><div class="km">Епремян · 9 000 ₽</div><div class="kf"><span class="pill accent">3 из 5 этапов</span></div></div>
+      </div>
+      <div class="col"><h4>Проверка <span>1</span></h4>
+        <div class="kc"><div class="kt">МЖД, ИТМО</div><div class="km">Бусурина · 14 000 ₽</div><div class="kf"><span class="pill ok">оплачено</span></div></div>
+      </div>
+      <div class="col"><h4>Сдан <span>1</span></h4>
+        <div class="kc"><div class="kt">Статья, ВШЭ</div><div class="km">Валерия · 7 500 ₽</div><div class="kf"><span class="pill ok">закрыт</span></div></div>
+      </div>
+    </div>
+    <div style="margin-top:18px"><button class="btn primary">+ Новый заказ</button></div>
+  </div>
+
+  <!-- БЛОГ -->
+  <div class="screen" data-screen="blog">
+    <div class="grid g-2">
+      <div class="card"><h3>Контент-план</h3>
+        <div class="row"><span class="tm">23.06</span><div class="main"><b>Shorts: «Ошибка №1 в ВКР»</b><div class="meta">YouTube Shorts · хук готов</div></div><span class="pill accent">съёмка</span></div>
+        <div class="row"><span class="tm">25.06</span><div class="main"><b>Reels: разбор антиплагиата</b><div class="meta">Instagram · сценарий</div></div><span class="pill warn">идея</span></div>
+        <div class="row"><span class="tm">27.06</span><div class="main"><b>Длинное: как сдать сессию</b><div class="meta">YouTube · монтаж</div></div><span class="pill ok">снято</span></div>
+      </div>
+      <div class="card"><h3>Калькулятор ER и хуки</h3>
+        <div class="stat" style="margin-bottom:12px"><div class="k">ER последнего ролика</div><div class="v ok">4,2 %</div><div class="sub">лайки + коммент + сохранения / охват</div></div>
+        <div class="chk"><div class="box">✓</div><div style="flex:1">Сильный хук в первой секунде</div></div>
+        <div class="chk"><div class="box"></div><div style="flex:1">Субтитры и обложка</div></div>
+        <div style="margin-top:12px"><button class="btn primary">Сгенерировать хук</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ОРГ -->
+  <div class="screen" data-screen="org">
+    <div class="grid g-2">
+      <div class="card"><h3>Задачи</h3>
+        <div class="chk"><div class="box">✓</div><div style="flex:1;opacity:.6;text-decoration:line-through">Выставить счёт Кифанидис</div><span class="pill">сегодня</span></div>
+        <div class="chk"><div class="box"></div><div style="flex:1">Отправить отчёт родителю Алисы</div><span class="pill danger">высокий</span></div>
+        <div class="chk"><div class="box"></div><div style="flex:1">Подготовить материалы РКИ</div><span class="pill warn">завтра</span></div>
+        <div style="margin-top:12px;display:flex;gap:9px"><input class="inp" placeholder="Новая задача..." style="flex:1"><button class="btn primary">+</button></div>
+      </div>
+      <div class="card"><h3>Привычки</h3>
+        <div class="chk"><div style="flex:1">Английский 20 мин</div><div class="hbset"><span class="hb on">пн</span><span class="hb on">вт</span><span class="hb">ср</span><span class="hb on">чт</span><span class="hb">пт</span></div></div>
+        <div class="chk"><div style="flex:1">Контент-съёмка</div><div class="hbset"><span class="hb on">пн</span><span class="hb">вт</span><span class="hb on">ср</span><span class="hb">чт</span><span class="hb on">пт</span></div></div>
+        <div class="chk"><div style="flex:1">Разбор заявок</div><div class="hbset"><span class="hb on">пн</span><span class="hb on">вт</span><span class="hb on">ср</span><span class="hb on">чт</span><span class="hb">пт</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- АНАЛИТИКА -->
+  <div class="screen" data-screen="analytics">
+    <div class="grid g-main" style="margin-bottom:16px">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><h3 style="margin:0">Доход по дням</h3>
+          <div class="seg-mini" id="aseg" style="margin-left:auto"><button class="on" data-m="money">Доход</button><button data-m="count">Занятия</button></div></div>
+        <div class="well" id="awell">
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+          <div class="col"><span class="barv"></span><div class="bar"></div></div>
+        </div>
+        <div class="clbl"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+      </div>
+      <div class="card">
+        <h3>Оплаты за неделю</h3>
+        <div class="ring">
+          <svg width="128" height="128" viewBox="0 0 128 128">
+            <circle cx="64" cy="64" r="50" fill="none" stroke="var(--chip)" stroke-width="14"/>
+            <circle id="aarc" cx="64" cy="64" r="50" fill="none" stroke="var(--ok)" stroke-width="14" stroke-linecap="round" transform="rotate(-90 64 64)" stroke-dasharray="314.16" stroke-dashoffset="314.16" style="transition:stroke-dashoffset 1s cubic-bezier(.22,1,.36,1)"/>
+          </svg>
+          <div class="center"><span class="pc" id="apc">0%</span><span class="pl">оплачено</span></div>
+        </div>
+        <div class="leg">
+          <div class="li"><span class="swx" style="background:var(--ok)"></span>Оплачено <b>26 200 ₽</b></div>
+          <div class="li"><span class="swx" style="background:var(--chip)"></span>Долг <b style="color:var(--danger)">13 800 ₽</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="grid g-2">
+      <div class="card">
+        <h3>Загрузка по часам</h3>
+        <div class="well" id="hwell" style="height:130px">
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+          <div class="col"><div class="bar"></div></div><div class="col"><div class="bar"></div></div>
+        </div>
+        <div class="clbl"><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span></div>
+      </div>
+      <div class="card">
+        <h3>Воронка заказов</h3>
+        <div class="fn" id="fn">
+          <div class="fnrow"><span class="fnk">Заявки</span><div class="fnbar" data-v="12">12</div></div>
+          <div class="fnrow"><span class="fnk">Оценка</span><div class="fnbar" data-v="8">8</div></div>
+          <div class="fnrow"><span class="fnk">В работе</span><div class="fnbar" data-v="5">5</div></div>
+          <div class="fnrow"><span class="fnk">Сдан</span><div class="fnbar" data-v="3">3</div></div>
+        </div>
+        <div class="note">За месяц: из 12 заявок 3 доведены до сдачи, конверсия 25%.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- СИНХРОНИЗАЦИЯ -->
+  <div class="screen" data-screen="sync">
+    <div class="grid g-2">
+      <div class="card">
+        <h3>Состояние</h3>
+        <div class="row" style="cursor:default"><span class="live"></span><div class="main"><b>Синхронизировано</b><div class="meta">последний раз 2 минуты назад</div></div><span class="pill ok">в сети</span></div>
+        <div class="chk" style="cursor:default"><div style="flex:1"><b>Автосинхронизация</b><div style="font-size:12px;color:var(--ink-soft)">пуш при изменениях, пул при возврате в приложение</div></div><div class="sw-tog" id="autotog"><div class="kn"></div></div></div>
+        <div style="margin-top:12px"><button class="btn primary" id="syncnow">Синхронизировать сейчас</button></div>
+        <div class="note">Политика слияния: последняя запись побеждает по времени правки. Изменения копятся офлайн и уходят, как только появляется сеть.</div>
+      </div>
+      <div class="card">
+        <h3>Ключ-пространство</h3>
+        <div class="fld"><span class="l" style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-mut);margin-bottom:6px">Ключ доступа к твоим данным</span>
+          <div class="inp" id="keyfield" style="font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em">shtab-••••••••••••3f7a</div></div>
+        <div style="display:flex;gap:9px"><button class="btn sm" id="keyshow">Показать</button><button class="btn sm">Копировать</button></div>
+        <h3 style="margin-top:18px">Устройства</h3>
+        <div class="chk" style="cursor:default"><div class="box" style="color:var(--accent)">●</div><div style="flex:1">Этот компьютер<div style="font-size:12px;color:var(--ink-soft)">активен сейчас</div></div></div>
+        <div class="chk" style="cursor:default"><div class="box"></div><div style="flex:1">iPhone, Safari<div style="font-size:12px;color:var(--ink-soft)">был 2 минуты назад</div></div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>Журнал синхронизаций</h3>
+      <div class="row" style="cursor:default"><span class="tm" style="min-width:96px">22.06 14:58</span><div class="main">Отправлено 3 изменения<div class="meta">занятие, комментарий, задача</div></div><span class="pill ok">успешно</span></div>
+      <div class="row" style="cursor:default"><span class="tm" style="min-width:96px">22.06 14:31</span><div class="main">Получено с iPhone<div class="meta">2 новых занятия</div></div><span class="pill ok">успешно</span></div>
+      <div class="row" style="cursor:default"><span class="tm" style="min-width:96px">22.06 09:12</span><div class="main">Полная синхронизация<div class="meta">при открытии приложения</div></div><span class="pill ok">успешно</span></div>
+    </div>
+  </div>
+
+  <!-- легенда -->
+  <div class="card">
+    <h3>Дизайн-язык неоморфизма</h3>
+    <div class="legend">
+      <span class="sw"><span class="dot"></span> Выпуклая поверхность, карточки и навигация</span>
+      <span class="sw"><span class="dot in"></span> Вдавленная, поля ввода и активные вкладки</span>
+      <span class="sw"><span class="dot ac"></span> Акцент, ключевые действия и цифры</span>
+    </div>
+    <div class="note">Текст, цифры и статусы держат контраст и цветовое кодирование. Тема переключается кнопкой ◐. Тапни занятие, заказ или ученика, чтобы увидеть комментарии.</div>
+  </div>
+</div>
+
+<!-- ОВЕРЛЕЙ: ДОСЬЕ УЧЕНИКА -->
+<div class="ovl" id="ovl-dossier">
+  <div class="modal">
+    <div class="mh"><div class="ava">АК</div><div style="flex:1"><div class="nm">Алиса Краснова</div><div class="sb" style="font-size:12px;color:var(--ink-soft)">алгебра, 9 класс · ОГЭ · 1 200 ₽/зан</div></div><button class="icon-btn" style="width:36px;height:36px;font-size:14px" onclick="closeOvl()">✕</button></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">
+      <div class="stat"><div class="k">Проведено</div><div class="v">34</div></div>
+      <div class="stat"><div class="k">Долг</div><div class="v danger">1 200 ₽</div></div>
+      <div class="stat"><div class="k">Абонемент</div><div class="v ok">6</div></div>
+    </div>
+    <h3 style="font-size:12px;color:var(--ink-mut);text-transform:uppercase;margin:0 0 10px">Комментарии по ученику</h3>
+    <div class="cmts" id="cmts-dossier">
+      <div class="cmt"><div class="ch"><span class="ctag">прогресс</span><span class="cd">18 июня</span></div><div class="ctx">Подтянули квадратные уравнения, тема закрыта. Дальше — системы.</div></div>
+      <div class="cmt"><div class="ch"><span class="ctag">родитель</span><span class="cd">10 июня</span></div><div class="ctx">Мама просила отчёт раз в две недели. Договорились по пятницам.</div></div>
+      <div class="cmt"><div class="ch"><span class="ctag">оплата</span><span class="cd">3 июня</span></div><div class="ctx">Оплатила абонемент на 8 занятий вперёд.</div></div>
+    </div>
+    <div class="cadd"><textarea class="inp" id="in-dossier" placeholder="Новый комментарий по ученику..."></textarea><button class="btn primary" onclick="addCmt('dossier')">Добавить</button></div>
+  </div>
+</div>
+
+<!-- ОВЕРЛЕЙ: РЕДАКТОР ЗАНЯТИЯ -->
+<div class="ovl" id="ovl-lesson">
+  <div class="modal">
+    <div class="mh"><div style="flex:1"><div class="nm">Занятие</div><div class="sb" style="font-size:12px;color:var(--ink-soft)">Алиса К. · 22 июня</div></div><button class="icon-btn" style="width:36px;height:36px;font-size:14px" onclick="closeOvl()">✕</button></div>
+    <div class="frow"><div class="fld"><span class="l">Дата</span><input class="inp" value="2026-06-22"></div><div class="fld"><span class="l">Время</span><input class="inp" value="14:00"></div></div>
+    <div class="fld"><span class="l">Тема</span><input class="inp" value="Квадратные уравнения, отработка"></div>
+    <div class="frow"><div class="fld"><span class="l">Статус</span><input class="inp" value="Проведено"></div><div class="fld"><span class="l">Стоимость, ₽</span><input class="inp" value="1200"></div></div>
+    <div class="fld"><span class="l">Домашнее задание</span><textarea class="inp">№ 4.12–4.20, повторить формулы Виета</textarea></div>
+    <h3 style="font-size:12px;color:var(--ink-mut);text-transform:uppercase;margin:4px 0 10px">Комментарии по уроку</h3>
+    <div class="cmts" id="cmts-lesson">
+      <div class="cmt"><div class="ch"><span class="ctag">урок</span><span class="cd">22 июня, 15:02</span></div><div class="ctx">Хорошо решает, но путается в знаках при переносе. Дать ещё примеров.</div></div>
+      <div class="cmt"><div class="ch"><span class="ctag">ДЗ</span><span class="cd">22 июня, 15:03</span></div><div class="ctx">ДЗ выдано, проверю на следующем занятии.</div></div>
+    </div>
+    <div class="cadd"><textarea class="inp" id="in-lesson" placeholder="Новый комментарий по уроку..."></textarea><button class="btn primary" onclick="addCmt('lesson')">Добавить</button></div>
+    <div style="display:flex;gap:10px;margin-top:16px"><button class="btn primary" onclick="closeOvl()">Сохранить</button><button class="btn" onclick="closeOvl()">Отмена</button></div>
+    <div class="note">После сохранения возвращаемся на тот же экран, с которого открыли. Никаких прыжков на главную.</div>
+  </div>
+</div>
+
+<script>
+  var seg=document.getElementById('seg');
+  seg.addEventListener('click',function(e){var b=e.target.closest('button[data-s]');if(!b)return;
+    seg.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});
+    document.querySelectorAll('.screen').forEach(function(s){s.classList.toggle('on',s.dataset.screen===b.dataset.s);});});
+  document.getElementById('theme').addEventListener('click',function(){
+    var h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light';});
+  function openDossier(){document.getElementById('ovl-dossier').classList.add('on');}
+  function openLesson(){document.getElementById('ovl-lesson').classList.add('on');}
+  function closeOvl(){document.querySelectorAll('.ovl').forEach(function(o){o.classList.remove('on');});}
+  document.querySelectorAll('.ovl').forEach(function(o){o.addEventListener('click',function(e){if(e.target===o)closeOvl();});});
+  function addCmt(which){var ta=document.getElementById('in-'+which),v=ta.value.trim();if(!v)return;
+    var box=document.getElementById('cmts-'+which);var d=new Date();
+    var dd=d.getDate()+' '+['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'][d.getMonth()]+', '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+    var c=document.createElement('div');c.className='cmt';
+    c.innerHTML='<div class="ch"><span class="ctag">'+(which==='lesson'?'урок':'заметка')+'</span><span class="cd">'+dd+'</span></div><div class="ctx"></div>';
+    c.querySelector('.ctx').textContent=v;box.appendChild(c);ta.value='';c.scrollIntoView({behavior:'smooth',block:'nearest'});}
+
+  /* analytics */
+  var rm=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var DAYS={money:[5200,3800,6400,4100,7200,2600,1500],count:[7,5,8,6,9,3,2]},curM='money';
+  var HOURS=[2,4,3,5,6,4,7,5,8,6,3,2];
+  function drawDays(){var d=DAYS[curM],mx=Math.max.apply(null,d),cols=document.querySelectorAll('#awell .col');
+    cols.forEach(function(c,i){var bar=c.querySelector('.bar'),v=c.querySelector('.barv');bar.style.height='0%';v.style.opacity='0';
+      setTimeout(function(){bar.style.height=Math.round(d[i]/mx*100)+'%';v.textContent=curM==='money'?(d[i]/1000).toFixed(1).replace('.0','')+'к':d[i];v.style.opacity='1';},rm?0:60+i*50);});}
+  function drawHours(){var mx=Math.max.apply(null,HOURS),cols=document.querySelectorAll('#hwell .col');
+    cols.forEach(function(c,i){var bar=c.querySelector('.bar');bar.style.height='0%';setTimeout(function(){bar.style.height=Math.round(HOURS[i]/mx*100)+'%';},rm?0:40+i*35);});}
+  function drawRing(){var arc=document.getElementById('aarc'),pc=document.getElementById('apc'),share=26200/40000,C=314.16;
+    arc.style.strokeDashoffset=C;pc.textContent='0%';
+    setTimeout(function(){arc.style.strokeDashoffset=C*(1-share);},rm?0:240);
+    if(rm){pc.textContent=Math.round(share*100)+'%';return;}
+    var st=null;function step(t){st=st||t;var p=Math.min((t-st)/1000,1);pc.textContent=Math.round(share*100*p)+'%';if(p<1)requestAnimationFrame(step);}
+    setTimeout(function(){requestAnimationFrame(step);},240);}
+  function drawFunnel(){var bars=document.querySelectorAll('#fn .fnbar'),mx=12;
+    bars.forEach(function(b,i){b.style.width='0';setTimeout(function(){b.style.width=(+b.dataset.v/mx*100)+'%';},rm?0:80+i*90);});}
+  function drawAnalytics(){drawDays();drawHours();drawRing();drawFunnel();}
+  document.getElementById('aseg').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+    this.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});curM=b.dataset.m;drawDays();});
+  seg.addEventListener('click',function(e){var b=e.target.closest('button[data-s]');if(!b)return;if(b.dataset.s==='analytics')setTimeout(drawAnalytics,50);});
+
+  /* sync screen */
+  document.getElementById('autotog').addEventListener('click',function(){this.classList.toggle('off');});
+  document.getElementById('keyshow').addEventListener('click',function(){var f=document.getElementById('keyfield');
+    if(f.textContent.indexOf('•')>=0){f.textContent='shtab-7k2p9x4m1q3f7a';this.textContent='Скрыть';}else{f.textContent='shtab-••••••••••••3f7a';this.textContent='Показать';}});
+  document.getElementById('syncnow').addEventListener('click',function(){var b=this,o=b.textContent;b.innerHTML='<span class="spin">↻</span> Синхронизация...';
+    setTimeout(function(){b.textContent='Готово, синхронизировано';setTimeout(function(){b.textContent=o;},1400);},1100);});
+</script>
+</body>
+</html>
