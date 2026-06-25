@@ -42,6 +42,36 @@ async function handleAsk(body, env){
   } catch (e) { return { answer: null, note: "ai_network" }; }
 }
 
+function ttsTicks(){var now=BigInt(Date.now()),unixSec=now/1000n,win=(unixSec+11644473600n)*10000000n;win=win-(win%3000000000n);return win.toString();}
+async function ttsSecMsGec(){var str=ttsTicks()+"6A5AA1D4EAFF4E9FB37E23D68491D6F4";var buf=new TextEncoder().encode(str);var hash=await crypto.subtle.digest("SHA-256",buf);var u8=new Uint8Array(hash),hex="";for(var i=0;i<u8.length;i++){hex+=u8[i].toString(16).padStart(2,"0");}return hex.toUpperCase();}
+function ttsConfigMsg(){return "X-Timestamp:"+new Date().toString()+"\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"+JSON.stringify({context:{synthesis:{audio:{metadataoptions:{sentenceBoundaryEnabled:"false",wordBoundaryEnabled:"false"},outputFormat:"audio-24khz-48kbitrate-mono-mp3"}}}});}
+function ttsSsmlMsg(text,voice){var rid="";var g=crypto.randomUUID().replace(/-/g,"");rid=g;var esc=String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");return "X-RequestId:"+rid+"\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:"+new Date().toString()+"\r\nPath:ssml\r\n\r\n<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ru-RU'><voice name='"+voice+"'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>"+esc+"</prosody></speak>".replace("</speak>","</voice></speak>");}
+function ttsConcat(arr){var len=0,i;for(i=0;i<arr.length;i++)len+=arr[i].length;var out=new Uint8Array(len),off=0;for(i=0;i<arr.length;i++){out.set(arr[i],off);off+=arr[i].length;}return out;}
+async function handleTts(body){
+  var text=((body&&body.text)||"").toString().slice(0,900);
+  if(!text)return null;
+  var voice=((body&&body.voice)||"ru-RU-SvetlanaNeural").toString().slice(0,60);
+  var token=await ttsSecMsGec();
+  var connId=crypto.randomUUID().replace(/-/g,"");
+  var url="https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC="+token+"&Sec-MS-GEC-Version=1-131.0.2903.112&ConnectionId="+connId;
+  var resp;
+  try{resp=await fetch(url,{headers:{"Upgrade":"websocket","Origin":"chrome-extension://jdiccldimpmdpfproefgaocafknbgmma","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"}});}catch(e){return null;}
+  var ws=resp&&resp.webSocket;
+  if(!ws)return null;
+  ws.accept();
+  return await new Promise(function(resolve){
+    var chunks=[],done=false;
+    var timer=setTimeout(function(){if(!done){done=true;try{ws.close();}catch(e){}resolve(chunks.length?ttsConcat(chunks):null);}},9000);
+    ws.addEventListener("message",function(ev){
+      var d=ev.data;
+      if(typeof d==="string"){if(d.indexOf("Path:turn.end")>=0){if(!done){done=true;clearTimeout(timer);try{ws.close();}catch(e){}resolve(chunks.length?ttsConcat(chunks):null);}}}
+      else{try{var u8=new Uint8Array(d);var hlen=(u8[0]<<8)|u8[1];if(2+hlen<=u8.length)chunks.push(u8.slice(2+hlen));}catch(e){}}
+    });
+    ws.addEventListener("close",function(){if(!done){done=true;clearTimeout(timer);resolve(chunks.length?ttsConcat(chunks):null);}});
+    ws.addEventListener("error",function(){if(!done){done=true;clearTimeout(timer);resolve(null);}});
+    try{ws.send(ttsConfigMsg());ws.send(ttsSsmlMsg(text,voice));}catch(e){if(!done){done=true;clearTimeout(timer);resolve(null);}}
+  });
+}
 function corsHeaders(env, request) {
   const origin = request.headers.get("Origin") || "";
   const allowedRaw = env.ALLOWED_ORIGIN || "*";
@@ -284,6 +314,15 @@ export default {
       try { body = await request.json(); } catch (e) { return json({ error: "bad_json" }, 400, cors); }
       const out = await handleAsk(body, env);
       return json(out, 200, cors);
+    }
+
+    if (url.pathname === "/tts" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); } catch (e) { return json({ error: "bad_json" }, 400, cors); }
+      const audio = await handleTts(body);
+      if (!audio || !audio.length) return json({ error: "tts_failed" }, 502, cors);
+      const h = corsHeaders(env, request); h["content-type"] = "audio/mpeg"; h["cache-control"] = "no-store";
+      return new Response(audio, { status: 200, headers: h });
     }
 
     if (url.pathname !== "/state") {
