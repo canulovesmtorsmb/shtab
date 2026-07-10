@@ -3,6 +3,55 @@
 // Никакой привязки к пользователю: кто знает ключ — видит данные.
 // Слияние по принципу "последняя запись побеждает" (по updatedAt).
 
+// --- Ограничение частоты (best effort, в пределах изолята) ---
+const RL = new Map();
+function rateOk(ip, limit, windowMs) {
+  const now = Date.now();
+  const e = RL.get(ip);
+  if (!e || now - e.t > windowMs) { RL.set(ip, { t: now, n: 1 }); return true; }
+  e.n++;
+  if (RL.size > 5000) RL.clear();
+  return e.n <= limit;
+}
+const ALLOWED_MODELS = ["llama-3.3-70b-versatile","llama-3.1-8b-instant","openai/gpt-oss-120b","qwen/qwen3-32b","deepseek-r1-distill-llama-70b","gemma2-9b-it"];
+function icsEsc(v){ return String(v||"").replace(/([,;\\])/g,"\\$1").replace(/\r?\n/g,"\\n"); }
+function p2(n){ return n<10 ? "0"+n : ""+n; }
+function icsFromState(data){
+  const L = (data && data.lessons) || [], E = (data && data.events) || [];
+  const stu = {}; ((data && data.students) || []).forEach(function(s){ stu[s.id] = s.name; });
+  const now = new Date();
+  const stamp = now.getUTCFullYear()+p2(now.getUTCMonth()+1)+p2(now.getUTCDate())+"T"+p2(now.getUTCHours())+p2(now.getUTCMinutes())+p2(now.getUTCSeconds())+"Z";
+  const out = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//SHTAB//RU//","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:SHTAB"];
+  L.forEach(function(l){
+    if (!l || !l.date || l.status === "cancelled") return;
+    const d = String(l.date).replace(/-/g, "");
+    const m = /^(\d{1,2}):(\d{2})/.exec(l.time || "");
+    out.push("BEGIN:VEVENT", "UID:lesson-" + l.id + "@shtab", "DTSTAMP:" + stamp);
+    if (m) {
+      const sh = +m[1], sm = +m[2], dur = Number(l.duration) || 60;
+      const tot = sh * 60 + sm + dur, eh = Math.floor(tot / 60) % 24, em = tot % 60;
+      out.push("DTSTART:" + d + "T" + p2(sh) + p2(sm) + "00");
+      out.push("DTEND:" + d + "T" + p2(eh) + p2(em) + "00");
+    } else {
+      out.push("DTSTART;VALUE=DATE:" + d);
+    }
+    out.push("SUMMARY:" + icsEsc((stu[l.studentId] || l.topic || "Занятие") + (l.subject ? " - " + l.subject : "")));
+    if (l.topic) out.push("DESCRIPTION:" + icsEsc(l.topic));
+    out.push("END:VEVENT");
+  });
+  E.forEach(function(e){
+    if (!e || !e.date) return;
+    const d = String(e.date).replace(/-/g, "");
+    const m = /^(\d{1,2}):(\d{2})/.exec(e.time || "");
+    out.push("BEGIN:VEVENT", "UID:ev-" + e.id + "@shtab", "DTSTAMP:" + stamp);
+    if (m) { out.push("DTSTART:" + d + "T" + p2(+m[1]) + p2(+m[2]) + "00"); out.push("DTEND:" + d + "T" + p2((+m[1]+1)%24) + p2(+m[2]) + "00"); }
+    else out.push("DTSTART;VALUE=DATE:" + d);
+    out.push("SUMMARY:" + icsEsc(e.title || e.type || "Событие"), "END:VEVENT");
+  });
+  out.push("END:VCALENDAR");
+  return out.join("\r\n");
+}
+
 // --- Слияние состояния по записям (id + updatedAt) с надгробиями удалений (__deleted) ---
 function splitDel(data){var del=(data&&data.__deleted)||{},clean={};if(data)for(var k in data){if(k==="__deleted")continue;clean[k]=data[k];}return{data:clean,del:del};}
 function mergeDel(a,b){var out={};[a||{},b||{}].forEach(function(m){for(var st in m){out[st]=out[st]||{};var ids=m[st]||{};for(var id in ids){var t=ids[id]||0;if(!out[st][id]||t>out[st][id])out[st][id]=t;}}});return out;}
@@ -28,7 +77,8 @@ async function handleAsk(body, env){
   if (!q) return { answer: null, note: "empty" };
   if (!env.AI_API_KEY) return { answer: null, note: "ai_not_configured" };
   const base = (env.AI_API_BASE || "https://api.groq.com/openai/v1").replace(/\/+$/, "");
-  const model = (body && typeof body.model === "string" && body.model.trim()) ? body.model.trim().slice(0, 80) : (env.AI_MODEL || "llama-3.3-70b-versatile");
+  let model = (body && typeof body.model === "string" && body.model.trim()) ? body.model.trim().slice(0, 80) : (env.AI_MODEL || "llama-3.3-70b-versatile");
+  if (ALLOWED_MODELS.indexOf(model) < 0) model = env.AI_MODEL || "llama-3.3-70b-versatile";
   const ctx = ((body && body.context) || "").toString().slice(0, 14000);
   const sys = "Ты ассистент приложения ШТАБ (командный центр преподавателя). Отвечай СТРОГО валидным JSON без markdown и без пояснений: {\"say\": \"короткий ответ пользователю на русском, его зачитают вслух\", \"action\": null ИЛИ объект действия}. Если пользователь просто спрашивает — action=null, ответь в say на основе блока ДАННЫЕ, не выдумывай. Если пользователь просит ВЫПОЛНИТЬ действие — заполни action и в say кратко подтверди намерение. Возможные действия: add_lesson{studentName или studentId, date YYYY-MM-DD, time HH:MM, topic, cost}; move_lesson{lessonId, date, time}; mark_paid{lessonId}; mark_done{lessonId}; edit_lesson{lessonId, date, time, topic, cost}; add_student{name, subject, grade, rate, contact}; add_sub{studentName или studentId, kind('занятий' или 'период'), lessons, amount, date}; add_order{topic, clientName, deadline, price}; add_event{title, date, time, type, repeat('none','daily','weekly','biweekly','monthly')}; add_task{text, dueDate}; close_task{taskId}; mark_habit{habitId, date}; add_comment{target: student или lesson, id, text}; set_field{target: student или lesson, id, field, text}; copy_text{text}; make_ics{title, date, time, durationMin}; social{url}; undo{}. id и имена бери ТОЛЬКО из блока ДАННЫЕ (у строк указан {id ...}). Сегодняшняя дата есть в ДАННЫХ; относительные даты (завтра, в среду) переводи в YYYY-MM-DD сам. Если запрос неоднозначен (несколько подходящих записей, например двое с одним именем, или не хватает даты/времени) — не угадывай: верни action null и задай короткий уточняющий вопрос в say. Ты можешь сам сочинять тексты (отчёт родителю, письмо клиенту, домашнее задание, описание занятия, итоги) и класть их в поле text для add_comment, set_field или copy_text. copy_text используй, когда текст нужно просто подготовить для копирования (письмо, сообщение). make_ics — добавить событие в календарь устройства. social — статистика соцсети по ссылке. Для итогов недели и месяца бери готовые цифры из блока АНАЛИТИКА, не пересчитывай. Никогда не удаляй данные и не придумывай id.";
   const hist = Array.isArray(body && body.history) ? body.history.filter(function(m){return m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string";}).slice(-8).map(function(m){return { role: m.role, content: m.content.slice(0, 1500) };}) : [];
@@ -269,6 +319,25 @@ export default {
 
     if (url.pathname === "/health") {
       return json({ ok: true, service: "shtab-sync" }, 200, cors);
+    }
+
+    const ip = request.headers.get("CF-Connecting-IP") || "anon";
+    if (!rateOk(ip, 240, 60000)) return json({ error: "rate_limited" }, 429, cors);
+    if ((url.pathname === "/ask" || url.pathname === "/tts") && !rateOk("ai:" + ip, 20, 60000)) {
+      return json({ error: "rate_limited" }, 429, cors);
+    }
+
+    if (url.pathname === "/ics") {
+      const key = url.searchParams.get("key") || "";
+      if (!key || key.length < 8) return new Response("bad key", { status: 400, headers: cors });
+      if (!env.DB) return new Response("db", { status: 500, headers: cors });
+      const row = await env.DB.prepare("SELECT data FROM spaces WHERE key = ?").bind(key).first();
+      let data = null;
+      try { data = row ? JSON.parse(row.data) : null; } catch (e) { data = null; }
+      if (data && data.__deleted) delete data.__deleted;
+      const body = icsFromState(data || {});
+      const h = Object.assign({}, cors, { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "max-age=600" });
+      return new Response(body, { status: 200, headers: h });
     }
 
     // OAuth для приватной аналитики (этап O5). Это переходы из браузера, без заголовка токена.
