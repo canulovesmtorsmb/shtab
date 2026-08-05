@@ -1,4 +1,4 @@
-var CACHE="shtab-v2";
+var CACHE="shtab-v3";
 self.addEventListener("install",function(e){self.skipWaiting();e.waitUntil(caches.open(CACHE).then(function(c){return c.addAll(["./","./index.html"]).catch(function(){});}));});
 self.addEventListener("activate",function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return k===CACHE?null:caches.delete(k);}));}).then(function(){return self.clients.claim();}));});
 self.addEventListener("fetch",function(e){
