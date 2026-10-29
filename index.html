@@ -512,7 +512,7 @@ function openDB(){return new Promise(function(res,rej){var r=indexedDB.open(DB_N
 function ost(s,m){return db.transaction(s,m).objectStore(s);}
 function dbAll(s){return new Promise(function(res,rej){var r=ost(s,"readonly").getAll();r.onsuccess=function(){res(r.result||[]);};r.onerror=function(){rej(r.error);};});}
 function dbPut(s,o){return new Promise(function(res,rej){
- function go(){var r=ost(s,"readwrite").put(o);r.onsuccess=function(){res(o);if(typeof scheduleSyncPush==="function")scheduleSyncPush();};r.onerror=function(){rej(r.error);};}
+ function go(){var r=ost(s,"readwrite").put(o);r.onsuccess=function(){res(o);if(typeof syncMarkDirty==="function")syncMarkDirty(s,o&&o.id);};r.onerror=function(){rej(r.error);};}
  try{
   if(typeof REV_STORES!=="undefined"&&REV_STORES[s]&&db&&db.objectStoreNames.contains("revisions")&&o&&o.id){
    var g=ost(s,"readonly").get(o.id);
@@ -524,7 +524,7 @@ function dbPut(s,o){return new Promise(function(res,rej){
  }catch(e){}
  go();});}
 function shtabTomb(store,id){try{var m=JSON.parse(localStorage.getItem("shtab-del")||"{}");m[store]=m[store]||{};m[store][String(id)]=Date.now();localStorage.setItem("shtab-del",JSON.stringify(m));}catch(e){}}
-function dbDel(s,id){return new Promise(function(res,rej){var r=ost(s,"readwrite").delete(id);r.onsuccess=function(){shtabTomb(s,id);res();if(typeof scheduleSyncPush==="function")scheduleSyncPush();};r.onerror=function(){rej(r.error);};});}
+function dbDel(s,id){return new Promise(function(res,rej){var r=ost(s,"readwrite").delete(id);r.onsuccess=function(){shtabTomb(s,id);res();if(typeof syncMarkDirty==="function")syncMarkDirty(s,id);};r.onerror=function(){rej(r.error);};});}
 function dbClear(s){return new Promise(function(res,rej){var r=ost(s,"readwrite").clear();r.onsuccess=function(){res();};r.onerror=function(){rej(r.error);};});}
 
 function isoToD(iso){var p=String(iso).split("-");return new Date(+p[0],+p[1]-1,+p[2],12,0,0,0);}
@@ -968,7 +968,7 @@ function uiSnack(msg,label,fn){var old=document.getElementById("ui-snack");if(ol
  document.body.append(b);setTimeout(function(){if(document.getElementById("ui-snack")===b)b.remove();},12000);}
 function shtabUntomb(store,id){try{var m=JSON.parse(localStorage.getItem("shtab-del")||"{}");if(m[store])delete m[store][String(id)];localStorage.setItem("shtab-del",JSON.stringify(m));}catch(e){}}
 function trashPut(store,rec){return dbPut("trash",{id:uid(),store:store,rec:rec,at:Date.now(),updatedAt:Date.now()});}
-function trashRestore(t){return dbPut(t.store,t.rec).then(function(){shtabUntomb(t.store,t.rec.id);return dbDel("trash",t.id);}).then(function(){return Promise.all([dbAll(t.store),dbAll("trash")]);}).then(function(r){state.cache[t.store]=r[0];state.cache.trash=r[1];render();toast("Восстановлено");});}
+function trashRestore(t){var _r=Object.assign({},t.rec,{updatedAt:Date.now()});return dbPut(t.store,_r).then(function(){shtabUntomb(t.store,t.rec.id);return dbDel("trash",t.id);}).then(function(){return Promise.all([dbAll(t.store),dbAll("trash")]);}).then(function(r){state.cache[t.store]=r[0];state.cache.trash=r[1];render();toast("Восстановлено");});}
 function trashPurge(){var cut=Date.now()-2592e6,ch=Promise.resolve(),n=0;(state.cache.trash||[]).forEach(function(t){if((t.at||0)<cut){n++;ch=ch.then(function(){return dbDel("trash",t.id);});}});return n?ch.then(function(){return dbAll("trash");}).then(function(x){state.cache.trash=x;}):Promise.resolve();}
 function softDel(store,rec,msg){return trashPut(store,rec).then(function(){return dbDel(store,rec.id);}).then(function(){return Promise.all([dbAll(store),dbAll("trash")]);}).then(function(r){state.cache[store]=r[0];state.cache.trash=r[1];render();uiSnack(msg||"Удалено","Вернуть",function(){var t=null;(state.cache.trash||[]).forEach(function(x){if(x.rec&&x.rec.id===rec.id)t=x;});if(t)trashRestore(t);});});}
 function persistStorage(){try{if(navigator.storage&&navigator.storage.persist){navigator.storage.persisted().then(function(p){if(!p)navigator.storage.persist();});}}catch(e){}}
@@ -1694,7 +1694,7 @@ function lessonDebt(l){return !!(l.cost&&!l.paid&&!l.coveredBySub&&!l.noCount);}
 function lessonInCal(l){if(l.status==="cancelled")return false;if(!lessonEnded(l))return true;return lessonDebt(l);}
 function itPast(it){return it.kind==="lesson"&&lessonEnded(it.ev);}
 function itOpen(it){if(it.kind==="lesson")editFrom("lessons",it.ev);else if(it.kind==="post")editFrom("blogPosts",it.ev);else openEvent(it.ev);}
-function autoCloseLessons(){try{var arr=(state.cache.lessons||[]).filter(function(l){var st=l.status||"planned";return (st==="planned"||st==="rescheduled")&&lessonEnded(l);});if(!arr.length)return;var ch=Promise.resolve();arr.forEach(function(l){ch=ch.then(function(){l.status="done";l.updatedAt=Date.now();return dbPut("lessons",l);});});ch.then(function(){return dbAll("lessons");}).then(function(x){state.cache.lessons=x;render();toast("Закрыто занятий: "+arr.length);});}catch(e){}}
+function autoCloseLessons(){try{if(typeof syncFreshForAuto==="function"&&!syncFreshForAuto())return;var arr=(state.cache.lessons||[]).filter(function(l){var st=l.status||"planned";return (st==="planned"||st==="rescheduled")&&lessonEnded(l);});if(!arr.length)return;var ch=Promise.resolve();arr.forEach(function(l){ch=ch.then(function(){l.status="done";l.updatedAt=Date.now();return dbPut("lessons",l);});});ch.then(function(){return dbAll("lessons");}).then(function(x){state.cache.lessons=x;render();toast("Закрыто занятий: "+arr.length);});}catch(e){}}
 function dayItems(iso){var arr=[];(state.cache.lessons||[]).forEach(function(l){if(l.date===iso&&lessonInCal(l)&&scopeOk("lesson",l))arr.push({kind:"lesson",ev:l,iso:iso});});(state.cache.events||[]).forEach(function(ev){if(!scopeOk("event",ev))return;if(expand(ev,iso,iso,false).indexOf(iso)>=0)arr.push({kind:"event",ev:ev,iso:iso});});(state.cache.blogPosts||[]).forEach(function(pp){if(pp.date===iso&&scopeOk("post",pp))arr.push({kind:"post",ev:pp,iso:iso});});arr.sort(function(a,b){return(a.ev.time||"")<(b.ev.time||"")?-1:1;});return arr;}
 function evLabel(it){if(it.kind==="lesson"){var dg=(lessonEnded(it.ev)&&lessonDebt(it.ev))?" (долг)":"";return(it.ev.time?it.ev.time+" ":"")+(refName("students",it.ev.studentId,"name")||it.ev.topic||"урок")+dg;}if(it.kind==="post")return "план: "+(it.ev.title||"публикация");return(it.ev.time?it.ev.time+" ":"")+(it.ev.title||it.ev.type);}
 function evColor(it){if(it.kind==="lesson"){var st=studById(it.ev.studentId);return (st&&st.color)?st.color:"var(--accent)";}return it.kind==="post"?"#c98500":typeColor(it.ev.type);}
@@ -2279,40 +2279,139 @@ function handleImport(e){var file=e.target.files[0];if(!file)return;e.target.val
 function effTheme(mode){return (mode==="neo-dark"||mode==="glass"||mode==="glass-dark")?mode:"neo";}
 function applyTheme(mode){localStorage.setItem("shtab-theme",mode);document.documentElement.setAttribute("data-theme",effTheme(mode));}
 var SYNC_DEFAULT_URL="https://shtab-sync.siroqmanpilot.workers.dev";
-window._syncState=window._syncState||{busy:false,last:0,err:"",lastSeen:0};
+window._syncState=window._syncState||{busy:false,last:0,err:"",lastSeen:0,pulledAt:0,tooBig:[]};
+window._syncApplying=false;
 function syncTouch(){if(state.active==="sync")render();else{try{renderStatus();}catch(e){}}}
 function syncCfg(){var c={};try{c=JSON.parse(localStorage.getItem("shtab-sync-cfg")||"{}");}catch(e){c={};}if(!c.url)c.url=SYNC_DEFAULT_URL;if(!c.key)c.key="";if(!c.token)c.token="";return c;}
 function syncSave(c){localStorage.setItem("shtab-sync-cfg",JSON.stringify(c));}
 function syncGenKey(){var a="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789",s="";if(window.crypto&&crypto.getRandomValues){var arr=new Uint32Array(28);crypto.getRandomValues(arr);for(var i=0;i<28;i++)s+=a[arr[i]%a.length];}else{for(var j=0;j<28;j++)s+=a[Math.floor(Math.random()*a.length)];}return s;}
 function syncHeaders(c){var h={"Content-Type":"application/json"};if(c.token)h["X-Shtab-Token"]=c.token;return h;}
-function syncEndpoint(c){return c.url.replace(/\/+$/,"")+"/state?space="+encodeURIComponent(c.key);}
-function syncGather(){return Promise.all(STORES.map(function(s){return dbAll(s).then(function(rows){return [s,rows];});})).then(function(pairs){var o={};pairs.forEach(function(p){o[p[0]]=p[1];});try{o.__deleted=JSON.parse(localStorage.getItem("shtab-del")||"{}");}catch(e){o.__deleted={};}return o;});}
-function syncApply(data){if(!data||typeof data!=="object")return Promise.resolve();window._syncApplying=true;if(data.__deleted){try{var _loc=JSON.parse(localStorage.getItem("shtab-del")||"{}");for(var _st in data.__deleted){_loc[_st]=_loc[_st]||{};var _ids=data.__deleted[_st]||{};for(var _id in _ids){if(!_loc[_st][_id]||_ids[_id]>_loc[_st][_id])_loc[_st][_id]=_ids[_id];}}localStorage.setItem("shtab-del",JSON.stringify(_loc));}catch(e){}}var chain=Promise.resolve();STORES.forEach(function(s){if(!Object.prototype.hasOwnProperty.call(data,s))return;chain=chain.then(function(){return dbClear(s);}).then(function(){var rows=data[s]||[],c=Promise.resolve();rows.forEach(function(r){c=c.then(function(){return dbPut(s,r);});});return c;});});return chain.then(function(){return loadSettings();}).then(function(){return loadAll();}).then(function(){window._syncApplying=false;}).catch(function(e){window._syncApplying=false;});}
-var _syncTimer=null;
-function scheduleSyncPush(){var c=syncCfg();if(!c.key)return;if(window._syncApplying)return;clearTimeout(_syncTimer);_syncTimer=setTimeout(function(){syncPush();},1600);}
 function syncErrMsg(status,res){var e=res&&res.error;
   if(e==="unauthorized"||status===401)return "Worker отклонил доступ: не совпадает токен. Синхронизация → Дополнительно → впиши тот же токен, что задан в Cloudflare как APP_TOKEN.";
   if(e==="rate_limited"||status===429)return "Слишком часто. Worker придержал запросы, подожди минуту.";
-  if(e==="no_space"||e==="bad_space")return "Не задан ключ пространства.";
+  if(e==="no_space"||e==="bad_space"||e==="bad_space_key")return "Ключ пространства не задан или неверного вида.";
+  if(e==="batch_too_large"||status===413)return "Слишком большая пачка данных для сервера.";
   if(status===404||e==="not_found")return "Worker не знает этот адрес. Проверь поле «Адрес Worker» или залей свежий worker.js.";
-  if(status>=500)return "Ошибка на стороне Worker (код "+status+"). Посмотри логи в Cloudflare.";
+  if(status>=500)return "Ошибка на стороне Worker (код "+status+")"+(res&&res.detail?": "+res.detail:"")+".";
   if(e)return "Worker вернул ошибку: "+e;
   if(status&&status>=400)return "Worker ответил кодом "+status+".";
   return "";}
-function syncFetch(c,opt){var status=0;
-  return fetch(syncEndpoint(c),opt).then(function(r){status=r.status;return r.json().catch(function(){return null;});})
+
+// --- Синхронизация v2: по записям ---
+// Каждая запись уходит на сервер отдельно. Устройство отправляет только то, что поменялось,
+// и забирает только то, что поменялось на других. Локальная база никогда не стирается целиком:
+// для каждой записи побеждает версия с более поздней правкой, удаление сильнее равной по времени правки.
+function syncBase(c){return String(c.url||"").replace(/\/+$/,"");}
+function syncLS(k,def){try{var v=localStorage.getItem(k);return v?JSON.parse(v):def;}catch(e){return def;}}
+function syncLSset(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function recU(r){if(!r||typeof r!=="object")return 0;return Math.max(Number(r.updatedAt)||0,Number(r.updated)||0,Number(r.createdAt)||0);}
+function syncBytes(str){try{return new TextEncoder().encode(str).length;}catch(e){return unescape(encodeURIComponent(str)).length;}}
+var _syncDirty=null,_syncDirtyT=null;
+function syncDirty(){if(!_syncDirty){_syncDirty=syncLS("shtab-sync-dirty",null);if(!_syncDirty||typeof _syncDirty!=="object"||!_syncDirty.m)_syncDirty={seq:0,m:{}};}return _syncDirty;}
+function syncDirtyFlush(){clearTimeout(_syncDirtyT);_syncDirtyT=null;if(_syncDirty)syncLSset("shtab-sync-dirty",_syncDirty);}
+function syncDirtySave(){if(_syncDirtyT)return;_syncDirtyT=setTimeout(syncDirtyFlush,250);}
+function syncDirtyCount(){var d=syncDirty(),n=0;for(var s in d.m)n+=Object.keys(d.m[s]).length;return n;}
+function syncDirtySet(store,id){var d=syncDirty();d.seq++;d.m[store]=d.m[store]||{};d.m[store][String(id)]=d.seq;}
+function syncDirtyDrop(store,id,onlyIf){var d=syncDirty(),m=d.m[store];if(!m)return;var k=String(id);if(onlyIf!=null&&m[k]!==onlyIf)return;delete m[k];if(!Object.keys(m).length)delete d.m[store];}
+function syncMarkDirty(store,id){if(id==null||STORES.indexOf(store)<0||!syncCfg().key)return;syncDirtySet(store,id);syncDirtySave();if(!window._syncApplying)scheduleSyncPush();}
+function syncMarkAll(){return Promise.all(STORES.map(function(s){return dbAll(s).then(function(rows){return [s,rows];});})).then(function(pairs){
+  var have={};pairs.forEach(function(p){have[p[0]]={};p[1].forEach(function(r){if(r&&r.id!=null){syncDirtySet(p[0],r.id);have[p[0]][String(r.id)]=1;}});});
+  var tombs=syncLS("shtab-del",{});for(var s in tombs){if(STORES.indexOf(s)<0)continue;for(var id in (tombs[s]||{})){if(!(have[s]&&have[s][id]))syncDirtySet(s,id);}}
+  syncDirtyFlush();});}
+function syncCurGet(c){var x=syncLS("shtab-sync-cur",null);if(!x||x.key!==c.key)return {key:c.key,r:0,s:"",i:""};return x;}
+function syncJoin(key,mergeLocal){localStorage.removeItem("shtab-sync-cur");window._syncState.pulledAt=0;localStorage.setItem("shtab-sync-v2",key);
+  if(!mergeLocal){_syncDirty={seq:0,m:{}};syncDirtyFlush();return Promise.resolve();}
+  return syncMarkAll();}
+// Первый запуск новой синхронизации на устройстве с уже заданным ключом: всё локальное считается
+// неотправленным и уходит на сервер, где сливается по записям с тем, что прислали другие устройства.
+var _syncInitP=null;
+function syncEnsureV2(){var c=syncCfg();if(!c.key)return Promise.resolve();if(localStorage.getItem("shtab-sync-v2")===c.key)return Promise.resolve();if(!_syncInitP)_syncInitP=syncJoin(c.key,true).then(function(){_syncInitP=null;},function(){_syncInitP=null;});return _syncInitP;}
+function syncFetch(c,path,opt,extra){var status=0;
+  return fetch(syncBase(c)+path+"?space="+encodeURIComponent(c.key)+(extra||""),opt).then(function(r){status=r.status;return r.json().catch(function(){return null;});})
     .then(function(res){var m=syncErrMsg(status,res);if(m){var e=new Error(m);e._soft=true;throw e;}return res;});}
-function syncPush(){var c=syncCfg();var st=window._syncState;
-  if(!c.key||!c.url){st.err=c.url?"Ключ пространства не задан — синхронизация выключена.":"Не задан адрес Worker.";syncTouch();return Promise.resolve();}
+function syncGetLocal(store,id){return new Promise(function(res){try{var r=ost(store,"readonly").get(id);r.onsuccess=function(){var v=r.result;
+  if(v===undefined&&/^\d+$/.test(String(id))){var r2=ost(store,"readonly").get(Number(id));r2.onsuccess=function(){res(r2.result);};r2.onerror=function(){res(undefined);};}else res(v);};r.onerror=function(){res(undefined);};}catch(e){res(undefined);}});}
+var _syncTimer=null,_syncPushP=null,_syncPullP=null,_syncRetryT=null,_syncBackoff=0;
+function scheduleSyncPush(){var c=syncCfg();if(!c.key)return;if(window._syncApplying)return;clearTimeout(_syncTimer);_syncTimer=setTimeout(function(){syncPush();},1500);}
+function syncFail(e){var st=window._syncState;st.busy=false;st.err=(e&&e._soft)?e.message:"Нет связи с сервером. Проверь интернет.";syncTouch();
+  if(syncDirtyCount()&&!_syncRetryT){_syncBackoff=Math.min(300000,_syncBackoff?_syncBackoff*2:15000);_syncRetryT=setTimeout(function(){_syncRetryT=null;syncNow();},_syncBackoff);}}
+function syncOk(){var st=window._syncState;st.busy=false;st.err="";st.last=Date.now();_syncBackoff=0;}
+function syncPush(){var c=syncCfg(),st=window._syncState;
+  if(!c.key||!c.url){st.err=c.url?"Ключ пространства не задан — синхронизация выключена.":"Не задан адрес Worker.";syncTouch();return Promise.resolve(false);}
+  if(_syncPushP)return _syncPushP;
+  _syncPushP=syncEnsureV2().then(function(){
+    var d=syncDirty(),list=[];for(var s in d.m)for(var id in d.m[s])list.push([s,id,d.m[s][id]]);
+    if(!list.length)return true;
+    st.busy=true;syncTouch();
+    var tombs=syncLS("shtab-del",{});
+    return Promise.all(list.map(function(e){return syncGetLocal(e[0],e[1]).then(function(rec){
+      if(rec!==undefined&&rec!==null)return {s:e[0],i:e[1],u:recU(rec),d:rec,q:e[2]};
+      var t=Number(tombs[e[0]]&&tombs[e[0]][e[1]])||Date.now();return {s:e[0],i:e[1],u:t,x:1,q:e[2]};});}))
+    .then(function(items){
+      var batches=[],cur=[],bytes=2,tooBig=[];
+      items.forEach(function(it){var o={s:it.s,i:it.i,u:it.u};if(it.x)o.x=1;else o.d=it.d;var str=JSON.stringify(o),b=syncBytes(str)+1;
+        if(b>1800000){tooBig.push(it);return;}
+        if(cur.length&&bytes+b>1200000){batches.push(cur);cur=[];bytes=2;}
+        cur.push({o:o,it:it});bytes+=b;});
+      if(cur.length)batches.push(cur);
+      st.tooBig=tooBig.map(function(it){return it.s+": "+String((it.d&&(it.d.title||it.d.name||it.d.topic))||it.i).slice(0,60);});
+      var chain=Promise.resolve();
+      batches.forEach(function(bt){chain=chain.then(function(){
+        return syncFetch(c,"/v2/push",{method:"POST",headers:syncHeaders(c),body:JSON.stringify(bt.map(function(x){return x.o;}))}).then(function(){
+          bt.forEach(function(x){syncDirtyDrop(x.it.s,x.it.i,x.it.q);});syncDirtyFlush();});});});
+      return chain.then(function(){return true;});});
+  }).then(function(r){syncOk();syncTouch();return r;},function(e){syncFail(e);return false;}).then(function(r){_syncPushP=null;return r;});
+  return _syncPushP;}
+// Применить пришедшие с сервера записи. Каждое решение принимается внутри одной транзакции
+// по этой записи: прочитать локальную версию, сравнить метки, записать или удалить.
+function syncApplyRow(row,changed,tombs){return new Promise(function(res){
+  if(STORES.indexOf(row.s)<0||row.i==null){res(0);return;}
+  var tx;try{tx=db.transaction(row.s,"readwrite");}catch(e){res(0);return;}
+  var os=tx.objectStore(row.s),key=row.i,g=os.get(key);
+  function decide(local){var lu=local?recU(local):-1,ru=Number(row.u)||0,n=0;
+    if(row.x){
+      if(local&&lu>ru){syncDirtySet(row.s,local.id);}
+      else{if(local){os.delete(local.id);n=1;changed[row.s]=1;}tombs[row.s]=tombs[row.s]||{};if(!tombs[row.s][String(row.i)]||tombs[row.s][String(row.i)]<ru)tombs[row.s][String(row.i)]=ru;syncDirtyDrop(row.s,row.i);}
+    }else if(row.d&&typeof row.d==="object"){
+      var lt=Number(tombs[row.s]&&tombs[row.s][String(row.i)])||0;
+      if(!local&&lt&&lt>=ru){syncDirtySet(row.s,row.i);}
+      else if(local&&lu>ru){syncDirtySet(row.s,local.id);}
+      else if(local&&lu===ru&&JSON.stringify(local)===JSON.stringify(row.d)){syncDirtyDrop(row.s,row.i);}
+      else{os.put(row.d);n=1;changed[row.s]=1;if(lt&&lt<=ru&&tombs[row.s])delete tombs[row.s][String(row.i)];syncDirtyDrop(row.s,row.i);}
+    }
+    tx.oncomplete=function(){res(n);};tx.onerror=function(){res(0);};tx.onabort=function(){res(0);};}
+  g.onsuccess=function(){var v=g.result;if(v===undefined&&/^\d+$/.test(String(key))){var g2=os.get(Number(key));g2.onsuccess=function(){decide(g2.result);};g2.onerror=function(){decide(undefined);};}else decide(v);};
+  g.onerror=function(){decide(undefined);};});}
+function syncPull(force){var c=syncCfg(),st=window._syncState;
+  if(!c.key||!c.url){st.err=c.url?"Ключ пространства не задан — синхронизация выключена.":"Не задан адрес Worker.";syncTouch();return Promise.resolve(false);}
+  if(_syncPullP)return _syncPullP;
+  var cur=force?{key:c.key,r:0,s:"",i:""}:syncCurGet(c),changed={},applied=0;
   st.busy=true;syncTouch();
-  return syncGather().then(function(data){var now=Date.now();return syncFetch(c,{method:"POST",headers:syncHeaders(c),body:JSON.stringify({data:data,updatedAt:now})}).then(function(res){st.busy=false;st.err="";if(res&&res.conflict){st.lastSeen=res.updatedAt||st.lastSeen;return syncApply(res.data).then(function(){st.last=Date.now();if(state.active)render();});}st.last=Date.now();if(res&&res.updatedAt)st.lastSeen=res.updatedAt;if(res&&res.data&&res.changed&&!editorOpen()){return syncApply(res.data).then(function(){if(state.active)render();});}syncTouch();});}).catch(function(e){st.busy=false;st.err=(e&&e._soft)?e.message:"Нет связи с сервером. Проверь интернет.";syncTouch();});}
-function syncPull(force){var c=syncCfg();var st=window._syncState;
-  if(!c.key||!c.url){st.err=c.url?"Ключ пространства не задан — синхронизация выключена.":"Не задан адрес Worker.";syncTouch();return Promise.resolve();}
-  st.busy=true;syncTouch();
-  return syncFetch(c,{method:"GET",headers:syncHeaders(c)}).then(function(res){st.busy=false;st.err="";st.last=Date.now();
-    if(res&&res.data&&res.updatedAt&&(force||res.updatedAt>(st.lastSeen||0))){st.lastSeen=res.updatedAt;return syncApply(res.data).then(function(){if(state.active)render();});}
-    syncTouch();
-  }).catch(function(e){st.busy=false;st.err=(e&&e._soft)?e.message:"Нет связи с сервером. Проверь интернет.";syncTouch();});}
+  function page(){return syncFetch(c,"/v2/pull",{method:"GET",headers:syncHeaders(c)},"&r="+encodeURIComponent(cur.r)+"&s="+encodeURIComponent(cur.s)+"&i="+encodeURIComponent(cur.i)).then(function(res){
+    var rows=(res&&res.rows)||[],tombs=syncLS("shtab-del",{}),ch=Promise.resolve();
+    window._syncApplying=true;
+    rows.forEach(function(row){ch=ch.then(function(){return syncApplyRow(row,changed,tombs).then(function(n){applied+=n;});});});
+    return ch.then(function(){window._syncApplying=false;syncLSset("shtab-del",tombs);syncDirtyFlush();
+      if(res&&res.cur){cur={key:c.key,r:res.cur.r,s:res.cur.s,i:res.cur.i};syncLSset("shtab-sync-cur",cur);}
+      if(rows.length)return page();});});}
+  _syncPullP=syncEnsureV2().then(page).then(function(){
+    st.pulledAt=Date.now();var stores=Object.keys(changed);
+    if(!stores.length)return applied;
+    return Promise.all(stores.map(function(s){return dbAll(s).then(function(r){state.cache[s]=r;});})).then(function(){if(changed.settings)return loadSettings();})
+      .then(function(){if(!editorOpen())render();return applied;});
+  }).then(function(n){syncOk();syncTouch();if(syncDirtyCount())scheduleSyncPush();return n;},function(e){window._syncApplying=false;syncFail(e);return false;}).then(function(r){_syncPullP=null;return r;});
+  return _syncPullP;}
+function syncNow(){return syncPush().then(function(){return syncPull(false);}).then(function(){if(syncDirtyCount())return syncPush();});}
+function syncFreshForAuto(){var c=syncCfg();if(!c.key)return true;var st=window._syncState;return !!st.pulledAt&&(Date.now()-st.pulledAt)<180000;}
+function syncInit(){
+  try{var hm=(location.hash||"").match(/key=([A-Za-z0-9_-]{16,128})/);if(hm){try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
+    if(syncCfg().key!==hm[1])setTimeout(function(){state.active="sync";render();syncConnect(syncCfg(),hm[1]);},1500);}}catch(e){}
+  setTimeout(function(){if(syncCfg().key)syncNow();},800);
+  setInterval(function(){if(syncCfg().key&&!document.hidden&&!editorOpen())syncNow();},60000);
+  document.addEventListener("visibilitychange",function(){if(!syncCfg().key)return;if(document.hidden){syncDirtyFlush();if(syncDirtyCount())syncPush();}else if(!editorOpen())syncNow();});
+  window.addEventListener("focus",function(){if(syncCfg().key&&!editorOpen())syncNow();});
+  window.addEventListener("online",function(){if(syncCfg().key)syncNow();});
+  window.addEventListener("pagehide",syncDirtyFlush);}
 function syncDiag(){var c=syncCfg(),lines=[],box=el("div",{}),pre=el("div",{class:"note",style:"white-space:pre-wrap;line-height:1.6"});
   function add(t){lines.push(t);pre.textContent=lines.join("\n");}
   box.append(pre);uiBox("Проверка синхронизации",box,[{t:"Закрыть",fn:uiClose},{t:"Копировать отчёт",fn:function(){copyText(lines.join("\n"));}}]);
@@ -2320,49 +2419,47 @@ function syncDiag(){var c=syncCfg(),lines=[],box=el("div",{}),pre=el("div",{clas
   add("Ключ пространства: "+(c.key?(c.key.slice(0,4)+"…"+c.key.slice(-4)+", "+c.key.length+" символов"):"НЕ ЗАДАН — это и есть причина, синхронизация выключена"));
   add("Токен: "+(c.token?"задан, "+c.token.length+" символов":"не задан"));
   add("Устройство: "+(navigator.onLine?"сеть есть":"СЕТИ НЕТ"));
+  add("Не отправлено с этого устройства: "+syncDirtyCount()+" записей");
+  var cur=syncCurGet(c);add("Прочитано с сервера до ревизии: "+cur.r);
+  if(window._syncState.tooBig&&window._syncState.tooBig.length)add("Слишком большие записи, сервер их не примет: "+window._syncState.tooBig.join("; "));
   add("");
-  var base=String(c.url||"").replace(/\/+$/,"");
+  var base=syncBase(c);
   if(!base||!c.key){add("Дальше проверять нечего: заполни адрес и ключ.");return;}
   add("Проверяю /health …");
   fetch(base+"/health").then(function(r){return r.json().catch(function(){return null;});}).then(function(j){
     add(j&&j.ok?"  Worker живой.":"  Worker ответил странно: "+JSON.stringify(j));
   }).catch(function(){add("  Worker недоступен. Либо нет интернета, либо адрес неверный.");})
-  .then(function(){add("");add("Проверяю чтение данных …");
-    var status=0;
-    return fetch(syncEndpoint(c),{method:"GET",headers:syncHeaders(c)}).then(function(r){status=r.status;return r.json().catch(function(){return null;});}).then(function(res){
-      var m=syncErrMsg(status,res);
-      if(m){add("  ОТКАЗ: "+m);return;}
-      if(!res||!res.data){add("  На сервере пока пусто. Нажми «Синхронизировать сейчас» на том устройстве, где данные есть.");return;}
-      var when=res.updatedAt?new Date(res.updatedAt).toLocaleString("ru-RU"):"неизвестно";
-      add("  Данные на сервере есть, обновлены: "+when);
+  .then(function(){add("");add("Проверяю данные на сервере …");
+    return syncFetch(c,"/v2/stats",{method:"GET",headers:syncHeaders(c)}).then(function(res){
+      add("  Ревизия сервера: "+res.rev+(res.rev>cur.r?"  ← есть непрочитанное, жми «Синхронизировать сейчас»":""));
       add("");add("Сравниваю с этим устройством:");
-      ["students","lessons","orders","tasks","events","expenses"].forEach(function(s){
-        var srv=(res.data[s]||[]).length,loc=(state.cache[s]||[]).length;
-        add("  "+({students:"ученики",lessons:"занятия",orders:"заказы",tasks:"задачи",events:"события",expenses:"расходы"}[s])+": на сервере "+srv+", здесь "+loc+(srv===loc?"":"  ← расходится"));
-      });
-      add("");
-      add(res.updatedAt>(window._syncState.lastSeen||0)?"Сервер новее этого устройства. Жми «Забрать с сервера».":"Это устройство не отстаёт.");
-    });}).catch(function(e){add("  Сбой проверки: "+(e&&e.message||e));});}
-function syncNow(){return syncPull(false).then(function(){return syncPush();});}
+      ["students","lessons","orders","tasks","events","expenses","notes","trainers"].forEach(function(s){
+        var srv=(res.counts&&res.counts[s])||0,loc=(state.cache[s]||[]).length;
+        add("  "+(({students:"ученики",lessons:"занятия",orders:"заказы",tasks:"задачи",events:"события",expenses:"расходы",notes:"заметки",trainers:"тренажёры"})[s])+": на сервере "+srv+", здесь "+loc+(srv===loc?"":"  ← расходится"));});
+    },function(e){add("  ОТКАЗ: "+((e&&e.message)||e));});}).catch(function(e){add("  Сбой проверки: "+(e&&e.message||e));});}
 function syncTimeLabel(ts){if(!ts)return "никогда";var d=Date.now()-ts;if(d<60000)return "только что";if(d<3600000)return Math.floor(d/60000)+" мин назад";try{var x=new Date(ts);return x.getHours()+":"+String(x.getMinutes()).padStart(2,"0");}catch(e){return "недавно";}}
+function syncConnect(c,k){return new Promise(function(res){var done=false;function go(merge){if(done)return;done=true;uiClose();c.key=k;syncSave(c);syncJoin(k,merge).then(function(){return syncNow();}).then(function(){render();res(true);});}
+  var m=uiBox("Подключение к общей базе",el("div",{class:"note",style:"white-space:pre-wrap;margin:6px 0 2px",text:"Как поступить с данными, которые уже лежат на этом устройстве?\n\n«Слить с облаком» – если здесь есть ваши записи и правки. Они объединятся с облаком по записям, ничего не пропадёт.\n\n«Только забрать облако» – если устройство новое или пустое. Оно заберёт общую базу, а своё в облако не отправит и ничего у себя не сотрёт."}),
+    [{t:"Отмена",fn:function(){done=true;uiClose();res(false);}},{t:"Только забрать облако",fn:function(){go(false);}},{t:"Слить с облаком",p:1,fn:function(){go(true);}}]);
+  m.ov._esc=function(){done=true;res(false);};});}
 function renderSync(view){var c=syncCfg(),st=window._syncState;view.append(syncExtras(c));
   view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Установка на телефон"}),el("div",{class:"util-howto",text:"Штаб не нужно искать в App Store, это веб-приложение. Чтобы оно встало как обычное приложение со своей иконкой и открывалось на весь экран: на iPhone откройте этот адрес в Safari, нажмите Поделиться (квадрат со стрелкой вверх), выберите На экран Домой и подтвердите. На Android в Chrome откройте меню (три точки) и выберите Установить приложение. После этого запускайте Штаб с иконки на рабочем столе, он работает и офлайн."})));
-  view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Синхронизация между устройствами"}),el("div",{class:"util-howto",text:"Штаб хранит данные локально и работает офлайн. Если задать секретный ключ-пространство, при наличии интернета изменения уходят в твоё облако (Cloudflare) и подтягиваются на других устройствах с тем же ключом. Никакого логина: ключ и есть доступ. Слияние простое: побеждает последняя по времени запись, поэтому не редактируй одно и то же на двух устройствах одновременно."})));
+  view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Синхронизация между устройствами"}),el("div",{class:"util-howto",text:"Штаб хранит данные локально и работает офлайн. Если задать секретный ключ-пространство, при наличии интернета изменения уходят в твоё облако (Cloudflare) и подтягиваются на других устройствах с тем же ключом. Никакого логина: ключ и есть доступ. Слияние идёт по записям: у каждой записи побеждает более поздняя правка, удаление тоже переносится. Локальная база при синхронизации никогда не стирается целиком. Если одну и ту же запись поправить на двух устройствах почти одновременно, останется последняя правка."})));
   if(!c.key){
     view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Подключение"}),el("div",{class:"util-howto",text:"На первом устройстве создай новое пространство. На остальных вставь тот же ключ, который покажет первое устройство."}),
       el("div",{class:"row-actions",style:"margin-top:8px"},
-        el("button",{class:"btn btn-primary btn-sm",onclick:function(){c.key=syncGenKey();syncSave(c);window._syncState.lastSeen=0;syncPush().then(function(){render();});}},"Создать новое пространство"),
-        el("button",{class:"btn btn-sm",onclick:function(){uiPrompt("Секретный ключ пространства (с первого устройства)","").then(function(k){if(!k)return;k=String(k).trim();if(!/^[A-Za-z0-9_-]{16,128}$/.test(k)){toast("Ключ должен быть 16-128 символов: латиница, цифры, _ и -");return;}c.key=k;syncSave(c);window._syncState.lastSeen=0;syncPull(true).then(function(){render();});});}},"Подключиться по ключу"))));
+        el("button",{class:"btn btn-primary btn-sm",onclick:function(){var k=syncGenKey();c.key=k;syncSave(c);syncJoin(k,true).then(function(){return syncNow();}).then(function(){render();});}},"Создать новое пространство"),
+        el("button",{class:"btn btn-sm",onclick:function(){uiPrompt("Секретный ключ пространства (с первого устройства)","").then(function(k){if(!k)return;k=String(k).trim();if(!/^[A-Za-z0-9_-]{16,128}$/.test(k)){toast("Ключ должен быть 16-128 символов: латиница, цифры, _ и -");return;}syncConnect(c,k);});}},"Подключиться по ключу"))));
     return;
   }
-  var link=c.url.replace(/\/+$/,"")+"/#key="+c.key;
-  var statusTxt=st.busy?"идёт синхронизация...":(st.err?st.err:("последняя синхронизация: "+syncTimeLabel(st.last)));
+  var link=location.origin+location.pathname+"#key="+c.key;
+  var _nd=syncDirtyCount(),statusTxt=st.busy?"идёт синхронизация...":(st.err?st.err:("последняя синхронизация: "+syncTimeLabel(st.last)+(_nd?", ждут отправки: "+_nd:", всё отправлено")));
   view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Статус"}),
     el("div",{style:"font-size:13px;margin:4px 0;"+(st.err?"color:var(--bad,#b3261e);font-weight:600":""),text:statusTxt}),
     el("div",{class:"row-actions",style:"margin-top:6px"},
       el("button",{class:"btn btn-primary btn-sm",onclick:function(){syncNow();}},"Синхронизировать сейчас"),
-      el("button",{class:"btn btn-sm",onclick:function(){syncPull(true);}},"Загрузить с сервера"),
-      el("button",{class:"btn btn-sm",onclick:function(){syncPush();}},"Отправить на сервер"),
+      el("button",{class:"btn btn-sm",onclick:function(){syncPull(true).then(function(){render();});}},"Перечитать всё с сервера"),
+      el("button",{class:"btn btn-sm",onclick:function(){syncMarkAll().then(function(){return syncPush();}).then(function(){render();});}},"Отправить всё заново"),
       el("button",{class:"btn btn-sm",onclick:syncDiag},"Проверить связь"))));
   var keyField=el("input",{type:"text",readonly:"true",style:"font-family:monospace"});keyField.value=c.key;
   view.append(el("div",{class:"panel"},el("span",{class:"lg",text:"Ключ пространства"}),el("div",{class:"util-howto",text:"Это секрет и одновременно доступ к данным. Открой Штаб на телефоне (тот же файл или будущая ссылка GitHub Pages), зайди в Синхронизацию и вставь этот ключ через «Подключиться по ключу». Никому не показывай."}),
@@ -2389,8 +2486,7 @@ function boot(){applyTheme(localStorage.getItem("shtab-theme")||"neo");
     setInterval(function(){if((localStorage.getItem("shtab-theme")||"classic")==="auto"){var eff=effTheme("auto");if(document.documentElement.getAttribute("data-theme")!==eff){applyTheme("auto");renderStatus();}}},60000);
     var lb=localStorage.getItem("shtab-last-backup");if(false)setTimeout(function(){toast(lb?"Давно не делали бэкап — кнопка Экспорт сверху":"Сделайте первый бэкап: кнопка Экспорт сверху");},1400);
     setInterval(tickClock,30000);render();
-    try{var hm=(location.hash||"").match(/key=([A-Za-z0-9_-]{16,128})/);if(hm){var sc2=syncCfg();if(sc2.key!==hm[1]){sc2.key=hm[1];syncSave(sc2);window._syncState.lastSeen=0;}}}catch(e){}
-    if(syncCfg().key){setTimeout(function(){syncPull(false);},800);setInterval(function(){if(!window._syncApplying&&!editorOpen())syncPull(false);},60000);}document.addEventListener("visibilitychange",function(){if(!document.hidden&&syncCfg().key&&!window._syncApplying&&!editorOpen())syncPull(false);});window.addEventListener("focus",function(){if(syncCfg().key&&!window._syncApplying&&!editorOpen())syncPull(false);});
+    syncInit();
   }).catch(function(err){document.getElementById("view").append(el("div",{class:"empty"},el("div",{class:"big",text:"IndexedDB недоступен"}),el("div",{text:"Откройте файл в обычном окне браузера, не в приватном режиме с блокировкой хранилища."})));});}
 function hotkey(e){var t=e.target,tag=(t&&t.tagName||"").toLowerCase(),typing=tag==="input"||tag==="textarea"||tag==="select"||(t&&t.isContentEditable);
   if(e.key==="Escape"){var did=false;if(state.searching){state.searching="";var sb=document.getElementById("search");if(sb)sb.value="";did=true;}if(state.editing!==null){state.editing=null;did=true;}if(state.evEditing!==null){state.evEditing=null;did=true;}if(state.noteEditing!==null){state.noteEditing=null;did=true;}if(state.dossierId){state.dossierId=null;did=true;}if(did){if(t&&t.blur)t.blur();render();}return;}
@@ -2479,7 +2575,7 @@ function asstDoAction(a){if(a.type==="copy_text"){var txt=a.text||"";if(!txt){as
  function fs(){if(a.studentId){return (c.students||[]).filter(function(s){return s.id===a.studentId;})[0];}if(a.studentName){var q=(""+a.studentName).toLowerCase();return (c.students||[]).filter(function(s){return (s.name||"").toLowerCase().indexOf(q)>=0;})[0];}return null;}
  function findById(store,id){return (c[store]||[]).filter(function(x){return x.id===id;})[0];}
 
- if(a.type==="undo"){var u=asstUndo.pop();if(!u){asstAdd("bot","Нечего отменять.");return;}var op=u.prev?dbPut(u.store,u.prev):dbDel(u.store,u.id);op.then(function(){return dbAll(u.store);}).then(function(x){state.cache[u.store]=x;render();toast("Отменено");asstJournalAdd("Отмена последнего действия");asstAdd("bot","Отменил последнее действие.");});return;}
+ if(a.type==="undo"){var u=asstUndo.pop();if(!u){asstAdd("bot","Нечего отменять.");return;}var op=u.prev?dbPut(u.store,Object.assign({},u.prev,{updatedAt:Date.now()})):dbDel(u.store,u.id);op.then(function(){return dbAll(u.store);}).then(function(x){state.cache[u.store]=x;render();toast("Отменено");asstJournalAdd("Отмена последнего действия");asstAdd("bot","Отменил последнее действие.");});return;}
 
  if(a.type==="add_lesson"){var st=fs();asstConfirm("Добавить занятие: "+(st?st.name:(a.studentName||"без ученика"))+(a.date?", "+a.date:"")+(a.time?" "+a.time:"")+(a.topic?", "+a.topic:"")+(a.cost?", "+a.cost+"р":"")+"?"+asstConflict(a.date,a.time),function(){var o={id:uid(),studentId:st?st.id:"",date:a.date||todayIso(),time:a.time||"",topic:a.topic||"",cost:(a.cost!=null&&a.cost!=="")?(Number(a.cost)||""):"",status:"planned",createdAt:Date.now(),updatedAt:Date.now()};dbPut("lessons",o).then(function(){asstUndoPush("lessons",o.id,null);return asstReload("lessons","Добавил занятие","Занятие: "+(st?st.name:"")+" "+(o.date||"")+" "+(o.time||""));});});return;}
 
