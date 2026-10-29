@@ -1,0 +1,7 @@
+{
+  "name": "shtab-tests",
+  "private": true,
+  "description": "Проверки ШТАБа: приложение в Chromium и Worker на локальной D1",
+  "scripts": { "test": "bash run.sh" },
+  "dependencies": { "playwright": "1.63.0", "wrangler": "3.114.17" }
+}
