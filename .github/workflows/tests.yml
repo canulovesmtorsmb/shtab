@@ -1,0 +1,22 @@
+name: Проверки ШТАБа
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["index.html", "worker.js", "tests/**", ".github/workflows/tests.yml"]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Playwright и wrangler
+        working-directory: tests
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Проверки
+        run: bash tests/run.sh
