@@ -16,6 +16,40 @@ function rateOk(ip, limit, windowMs) {
 const ALLOWED_MODELS = ["llama-3.3-70b-versatile","llama-3.1-8b-instant","openai/gpt-oss-120b","qwen/qwen3-32b","deepseek-r1-distill-llama-70b","gemma2-9b-it"];
 function icsEsc(v){ return String(v||"").replace(/([,;\\])/g,"\\$1").replace(/\r?\n/g,"\\n"); }
 function p2(n){ return n<10 ? "0"+n : ""+n; }
+// Время в ШТАБе: занятия хранятся по Москве, у школьных событий свой пояс (поле tz).
+// В календарь отдаём UTC-время, чтобы телефон в любом поясе показал правильно.
+const ICS_TZ_MIN = { "Europe/Moscow": 180, "Asia/Bishkek": 360 };
+const LESSON_TZ = "Europe/Moscow";
+function icsUtc(dateIso, h, mi, tz, addMin){
+  const a = String(dateIso).split("-"), off = ICS_TZ_MIN[tz];
+  const ms = Date.UTC(+a[0], +a[1] - 1, +a[2], h, mi) - off * 60000 + (addMin || 0) * 60000, d = new Date(ms);
+  return d.getUTCFullYear()+p2(d.getUTCMonth()+1)+p2(d.getUTCDate())+"T"+p2(d.getUTCHours())+p2(d.getUTCMinutes())+"00Z";
+}
+function icsTimes(out, dateIso, time, dur, tz){
+  const d = String(dateIso).replace(/-/g, ""), m = /^(\d{1,2}):(\d{2})/.exec(time || "");
+  if (!m) { out.push("DTSTART;VALUE=DATE:" + d); return; }
+  const sh = +m[1], sm = +m[2];
+  if (tz && ICS_TZ_MIN[tz] != null) { out.push("DTSTART:" + icsUtc(dateIso, sh, sm, tz, 0), "DTEND:" + icsUtc(dateIso, sh, sm, tz, dur)); return; }
+  const tot = sh * 60 + sm + dur, eh = Math.floor(tot / 60) % 24, em = tot % 60;
+  out.push("DTSTART:" + d + "T" + p2(sh) + p2(sm) + "00", "DTEND:" + d + "T" + p2(eh) + p2(em) + "00");
+}
+function icsDates(e){
+  const rep = e.repeat || "none", ex = e.ex || {}, res = [];
+  const start = new Date(String(e.date) + "T12:00:00Z"), until = e.until ? new Date(String(e.until) + "T12:00:00Z") : null;
+  const lim = new Date(Date.now() + 400 * 864e5);
+  let d = start, g = 0;
+  while (g++ < 800) {
+    if (d > lim || (until && d > until)) break;
+    const iso = d.toISOString().slice(0, 10);
+    if (!(ex[iso] && ex[iso].cancelled)) res.push(iso);
+    if (rep === "daily") d = new Date(d.getTime() + 864e5);
+    else if (rep === "weekly") d = new Date(d.getTime() + 7 * 864e5);
+    else if (rep === "biweekly") d = new Date(d.getTime() + 14 * 864e5);
+    else if (rep === "monthly") { d = new Date(d.getTime()); d.setUTCMonth(d.getUTCMonth() + 1); }
+    else break;
+  }
+  return res;
+}
 function icsFromState(data){
   const L = (data && data.lessons) || [], E = (data && data.events) || [];
   const stu = {}; ((data && data.students) || []).forEach(function(s){ stu[s.id] = s.name; });
@@ -24,29 +58,22 @@ function icsFromState(data){
   const out = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//SHTAB//RU//","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:SHTAB"];
   L.forEach(function(l){
     if (!l || !l.date || l.status === "cancelled") return;
-    const d = String(l.date).replace(/-/g, "");
-    const m = /^(\d{1,2}):(\d{2})/.exec(l.time || "");
     out.push("BEGIN:VEVENT", "UID:lesson-" + l.id + "@shtab", "DTSTAMP:" + stamp);
-    if (m) {
-      const sh = +m[1], sm = +m[2], dur = Number(l.duration) || 60;
-      const tot = sh * 60 + sm + dur, eh = Math.floor(tot / 60) % 24, em = tot % 60;
-      out.push("DTSTART:" + d + "T" + p2(sh) + p2(sm) + "00");
-      out.push("DTEND:" + d + "T" + p2(eh) + p2(em) + "00");
-    } else {
-      out.push("DTSTART;VALUE=DATE:" + d);
-    }
+    icsTimes(out, l.date, l.time, Number(l.duration) || 60, LESSON_TZ);
     out.push("SUMMARY:" + icsEsc((stu[l.studentId] || l.topic || "Занятие") + (l.subject ? " - " + l.subject : "")));
     if (l.topic) out.push("DESCRIPTION:" + icsEsc(l.topic));
     out.push("END:VEVENT");
   });
   E.forEach(function(e){
     if (!e || !e.date) return;
-    const d = String(e.date).replace(/-/g, "");
-    const m = /^(\d{1,2}):(\d{2})/.exec(e.time || "");
-    out.push("BEGIN:VEVENT", "UID:ev-" + e.id + "@shtab", "DTSTAMP:" + stamp);
-    if (m) { out.push("DTSTART:" + d + "T" + p2(+m[1]) + p2(+m[2]) + "00"); out.push("DTEND:" + d + "T" + p2((+m[1]+1)%24) + p2(+m[2]) + "00"); }
-    else out.push("DTSTART;VALUE=DATE:" + d);
-    out.push("SUMMARY:" + icsEsc(e.title || e.type || "Событие"), "END:VEVENT");
+    const dates = (e.repeat && e.repeat !== "none") ? icsDates(e) : [String(e.date)];
+    dates.forEach(function(iso){
+      out.push("BEGIN:VEVENT", "UID:ev-" + e.id + (dates.length > 1 || iso !== e.date ? "-" + iso : "") + "@shtab", "DTSTAMP:" + stamp);
+      icsTimes(out, iso, e.time, Number(e.duration) || 60, e.tz || "");
+      out.push("SUMMARY:" + icsEsc((e.title || e.type || "Событие") + (e.topic ? ": " + e.topic : "")));
+      if (e.notes) out.push("DESCRIPTION:" + icsEsc(e.notes));
+      out.push("END:VEVENT");
+    });
   });
   out.push("END:VCALENDAR");
   return out.join("\r\n");
