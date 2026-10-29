@@ -749,6 +749,42 @@ function ctxMenu(e,items){if(e&&e.preventDefault)e.preventDefault();if(e&&e.stop
  setTimeout(function(){function cl(){var x=document.getElementById("ctxmenu");if(x)x.remove();document.removeEventListener("click",cl);document.removeEventListener("contextmenu",cl);document.removeEventListener("scroll",cl,true);}
   document.addEventListener("click",cl);document.addEventListener("contextmenu",cl);document.addEventListener("scroll",cl,true);},0);
  return m;}
+function fmtDM(iso){return iso?String(iso).slice(8,10)+"."+String(iso).slice(5,7):"";}
+function fmtDMY(iso){return iso?String(iso).split("-").reverse().join("."):"";}
+function stLessons(s,fn){return (state.cache.lessons||[]).filter(function(l){return l.studentId===s.id&&fn(l);});}
+function cancelLessonRec(l,reason,now){l.status="cancelled";l.cancelReason=reason;l.cancelPaid=false;l.noCount=true;l.log=Array.isArray(l.log)?l.log:[];l.log.push({t:"Отменено: "+reason,at:now});l.updatedAt=now;return dbPut("lessons",l);}
+function reloadAfter(msg){return Promise.all([dbAll("lessons"),dbAll("students"),dbAll("slots")]).then(function(r){state.cache.lessons=r[0];state.cache.students=r[1];state.cache.slots=r[2];render();toast(msg);});}
+function studentLeave(s){var dt=el("input",{type:"date"});dt.value=todayIso();var rs=el("input",{type:"text",maxlength:200,placeholder:"например: родители отказались"});
+ var info=el("div",{class:"note",style:"margin-top:8px"});
+ function upd(){var d=dt.value||todayIso(),n=stLessons(s,function(l){return l.date>=d&&l.status!=="cancelled"&&l.status!=="done";}).length,sl=(state.cache.slots||[]).filter(function(x){return x.studentId===s.id;}).length;info.textContent="Ученик уйдёт в архив со статусом «ушёл». Снимется занятий с этого дня: "+n+(sl?", удалится строк шаблона недели: "+sl:"")+". Прошедшие занятия и оплаты останутся.";}
+ ["input","change"].forEach(function(e){dt.addEventListener(e,upd);});upd();
+ uiBox("Ученик ушёл: "+(s.name||""),el("div",{},el("div",{class:"grid2"},el("label",{class:"fld"},el("span",{class:"l",text:"С какого дня"}),dt),el("label",{class:"fld"},el("span",{class:"l",text:"Причина"}),rs)),info),[{t:"Отмена",fn:uiClose},{t:"Выписать",p:1,fn:function(){var d=dt.value||todayIso(),why=(rs.value||"").trim(),now=Date.now();uiClose();
+  var fut=stLessons(s,function(l){return l.date>=d&&l.status!=="cancelled"&&l.status!=="done";}),sl=(state.cache.slots||[]).filter(function(x){return x.studentId===s.id;});
+  s.status="ушёл";s.archived=true;s.leftReason=why||("Ушёл "+fmtDMY(d));s.leftAt=d;s.updatedAt=now;
+  var ch=dbPut("students",s);fut.forEach(function(l){ch=ch.then(function(){return cancelLessonRec(l,"ученик ушёл"+(why?" ("+why+")":""),now);});});sl.forEach(function(x){ch=ch.then(function(){return dbDel("slots",x.id);});});
+  ch.then(function(){return reloadAfter((s.name||"Ученик")+": в архиве, снято занятий "+fut.length);});}}]);}
+function studentVacation(s){var a=el("input",{type:"date"}),b=el("input",{type:"date"});a.value=todayIso();var inc=el("input",{type:"checkbox"}),info=el("div",{class:"note",style:"margin-top:8px"});
+ function pick(){var x=a.value,y=b.value;return stLessons(s,function(l){return l.date>=x&&l.date<=y&&l.status!=="cancelled"&&(inc.checked||l.status!=="done");});}
+ function upd(){var x=a.value,y=b.value;if(!x||!y||y<x){info.textContent="Укажите обе даты.";return;}var dn=stLessons(s,function(l){return l.date>=x&&l.date<=y&&l.status==="done";}).length;info.textContent="Снимется занятий: "+pick().length+(dn?". Отмечено проведёнными в этом периоде: "+dn+(inc.checked?", они тоже снимутся":", они останутся"):"")+".";}
+ [a,b,inc].forEach(function(x){x.addEventListener("input",upd);x.addEventListener("change",upd);});upd();
+ uiBox("Отпуск: "+(s.name||""),el("div",{},el("div",{class:"grid2"},el("label",{class:"fld"},el("span",{class:"l",text:"С"}),a),el("label",{class:"fld"},el("span",{class:"l",text:"По (включительно)"}),b)),el("label",{style:"display:flex;gap:8px;align-items:center;margin-top:8px"},inc,el("span",{text:"Снять и занятия, отмеченные проведёнными по ошибке"})),info),[{t:"Отмена",fn:uiClose},{t:"Снять занятия",p:1,fn:function(){var x=a.value,y=b.value;if(!x||!y||y<x){toast("Проверьте даты");return;}var L=pick(),now=Date.now(),why="отпуск "+fmtDM(x)+"–"+fmtDMY(y);uiClose();
+  s.notes=(s.notes?s.notes+"\n":"")+"Отпуск "+fmtDM(x)+"–"+fmtDMY(y)+", занятий нет.";s.updatedAt=now;
+  var ch=dbPut("students",s);L.forEach(function(l){ch=ch.then(function(){return cancelLessonRec(l,why,now);});});
+  ch.then(function(){return reloadAfter((s.name||"Ученик")+": снято занятий "+L.length);});}}]);}
+function studentPrice(s){var p=el("input",{type:"number",min:"0",step:"50"});p.value=s.rate||"";var d=el("input",{type:"date"});d.value=todayIso();var info=el("div",{class:"note",style:"margin-top:8px"});
+ function pick(){return stLessons(s,function(l){return l.date>=d.value&&l.status==="planned"&&!l.coveredBySub;});}
+ function upd(){info.textContent="Цена за занятие сменится в карточке и у запланированных занятий с этой даты: "+pick().length+". Прошедшие и проведённые занятия не меняются.";}
+ ["input","change"].forEach(function(e){d.addEventListener(e,upd);});upd();
+ uiBox("Новая цена: "+(s.name||""),el("div",{},el("div",{class:"grid2"},el("label",{class:"fld"},el("span",{class:"l",text:"Цена за занятие, ₽"}),p),el("label",{class:"fld"},el("span",{class:"l",text:"С какого дня"}),d)),info),[{t:"Отмена",fn:uiClose},{t:"Применить",p:1,fn:function(){var v=Number(p.value)||0;if(v<=0){toast("Нужна цена больше нуля");return;}var L=pick(),now=Date.now();uiClose();
+  s.rate=v;s.updatedAt=now;var ch=dbPut("students",s);L.forEach(function(l){ch=ch.then(function(){l.cost=v;l.updatedAt=now;return dbPut("lessons",l);});});
+  ch.then(function(){return reloadAfter((s.name||"Ученик")+": цена "+money(v)+", обновлено занятий "+L.length);});}}]);}
+function payBefore(sid){var st=sid?studById(sid):null,d=el("input",{type:"date"}),t=todayIso();d.value=t.slice(0,8)+"01";var info=el("div",{class:"note",style:"margin-top:8px"});
+ function list(){return lessonDebtList(sid||null).filter(function(l){return (l.date||"")<d.value;});}
+ function upd(){var L=list(),sum=L.reduce(function(x,l){return x+(+l.cost||0);},0);info.textContent="Отметятся оплаченными: "+L.length+" занятий на "+money(sum)+(sid?"":" у всех учеников")+". У каждого будет пометка «отмечено разом».";}
+ ["input","change"].forEach(function(e){d.addEventListener(e,upd);});upd();
+ uiBox(st?("Оплачено до даты: "+st.name):"Всё до даты уже оплачено",el("div",{},el("label",{class:"fld"},el("span",{class:"l",text:"Оплачено всё, что раньше этого дня"}),d),info),[{t:"Отмена",fn:uiClose},{t:"Отметить",p:1,fn:function(){var L=list();if(!L.length){toast("Нечего отмечать");return;}uiClose();var now=Date.now(),ch=Promise.resolve();
+  L.forEach(function(l){ch=ch.then(function(){l.paid=true;l.paidAt=l.paidAt||l.date;l.payMethod=l.payMethod||"ранее";l.payNote="отмечено разом: оплачено всё до "+fmtDMY(d.value);l.updatedAt=now;return dbPut("lessons",l);});});
+  ch.then(function(){return reloadAfter("Отмечено оплаченными: "+L.length);});}}]);}
 function studentMenu(e,s){var deb=(typeof studDebt==="function")?studDebt(s.id):0;
  ctxMenu(e,[
   {t:"Открыть досье",fn:function(){openStudentModal(s);}},
@@ -759,7 +795,7 @@ function studentMenu(e,s){var deb=(typeof studDebt==="function")?studDebt(s.id):
   {t:"+ Абонемент",fn:function(){editFrom("subs",{studentId:s.id,date:todayIso()});}},
   null,
   {t:deb>0?("Оплата · долг "+money(deb)):"Оплата",fn:function(){if(deb>0&&typeof payDialog==="function")payDialog(s.id,deb);else toast("Долга нет");}},
-  {t:"Отчёт родителю",fn:function(){if(typeof parentReport==="function")parentReport(s.id);}},
+  {t:"Оплачено до даты…",fn:function(){payBefore(s.id);}},{t:"Отпуск…",fn:function(){studentVacation(s);}},{t:"Новая цена с даты…",fn:function(){studentPrice(s);}},{t:s.archived?"Ученик в архиве":"Ученик ушёл…",fn:function(){if(s.archived){toast("Уже в архиве");return;}studentLeave(s);}},{t:"Отчёт родителю",fn:function(){if(typeof parentReport==="function")parentReport(s.id);}},
   null,
   {t:"Скопировать контакт",fn:function(){copyText(((s.contact||"")+" "+(s.parentContact||"")).trim()||"контакта нет");}},
   {t:"История правок",fn:function(){if(typeof revHistory==="function")revHistory("students",s);}},
@@ -1069,7 +1105,7 @@ function payDebts(view){var groups={},total=0;
  var keys=Object.keys(groups).sort(function(a,b){var sa=groups[a].reduce(function(x,l){return x+(+l.cost||0);},0),sb=groups[b].reduce(function(x,l){return x+(+l.cost||0);},0);return sb-sa;});
  var sel={};
  var head=el("div",{class:"stat-grid"},statBox("Всего долг",money(total)),statBox("Учеников",String(keys.length)),statBox("Занятий",String(lessonDebtList(null).length)));
- view.append(panel("Долги",head));
+ view.append(panel("Долги",el("div",{},head,el("div",{class:"row-actions",style:"margin-top:8px"},el("button",{class:"btn btn-sm",onclick:function(){payBefore(null);}},"Всё до даты уже оплачено…")))));
  if(!keys.length){view.append(el("div",{class:"empty",style:"padding:16px"},el("div",{text:"Долгов нет"})));return;}
  var list=el("div",{class:"list"});
  keys.forEach(function(k){var arr=groups[k],sum=arr.reduce(function(x,l){return x+(+l.cost||0);},0),st=studById(k),nm=(st&&st.name)||"(удалён)";
@@ -1225,7 +1261,7 @@ function slotGenerate(from,to){var slots=state.cache.slots||[];if(!slots.length)
    if(!exists)plan.push({iso:iso,sl:sl});});
   d=addDays(d,1);}
  if(!plan.length){toast("Нечего создавать");return;}
- uiConfirm("Создать занятий: "+plan.length+" с "+from+" по "+to+"?").then(function(ok){if(!ok)return;
+ uiConfirm("Создать занятий: "+plan.length+" с "+from+" по "+to+"?"+(function(){var z={};plan.forEach(function(p){var st=studById(p.sl.studentId);if(st&&!Number(st.rate))z[st.name]=1;});var n=Object.keys(z);return n.length?"\n\nВнимание: у учеников "+n.join(", ")+" ставка 0, их занятия создадутся без цены. Поставьте цену в карточке или через «Новая цена».":"";})()).then(function(ok){if(!ok)return;
   var sid=uid(),ch=Promise.resolve();
   plan.forEach(function(p){ch=ch.then(function(){var st=studById(p.sl.studentId);
    var o={id:uid(),studentId:p.sl.studentId,date:p.iso,time:p.sl.time,duration:p.sl.duration||60,subject:(st&&st.subject)||"",cost:(st&&Number(st.rate))||0,status:"planned",series:"tpl-"+sid,createdAt:Date.now(),updatedAt:Date.now()};
@@ -1640,7 +1676,7 @@ function renderDossier(view){var sid=state.dossierId,s=null;(state.cache.student
   var lessons=(state.cache.lessons||[]).filter(function(l){return l.studentId===sid;}).sort(function(a,b){return(b.date||"")<(a.date||"")?-1:1;});
   var done=lessons.filter(function(l){return l.status==="done";}),paid=0,debt=0;done.forEach(function(l){if(l.coveredBySub)return;var c=Number(l.cost)||0;if(l.paid)paid+=c;else debt+=c;});
   var subs=(state.cache.subs||[]).filter(function(x){return x.studentId===sid;}),trainers=(state.cache.trainers||[]).filter(function(t){return t.studentId===sid;}),notes=(state.cache.notes||[]).filter(function(n){return n.studentId===sid;}),consp=(state.cache.conspectus||[]).filter(function(c){return c.studentId===sid;});
-  view.append(panel("Ученик",el("div",{},el("h3",{style:"margin:0 0 8px;font-size:18px",text:s.name}),el("div",{class:"meta"},[s.subject,s.grade,(s.rate?money(s.rate)+"/зан":null),s.contact,s.parentContact?("родитель: "+s.parentContact):null].filter(Boolean).map(function(v){return el("span",{class:"chip",text:v});})),el("div",{class:"row-actions",style:"margin-top:10px"},el("button",{class:"btn btn-sm",onclick:function(){editFrom("students",s);}},"Редактировать"),el("button",{class:"btn btn-sm",onclick:function(){editFrom("lessons",{studentId:sid,status:"planned",date:todayIso()});}},"+ Занятие"),el("button",{class:"btn btn-sm",onclick:function(){editFrom("subs",{studentId:sid,kind:"занятий",date:todayIso()});}},"+ Абонемент"),el("button",{class:"btn btn-sm",onclick:function(){printParentReport(s);}},"PDF родителю")))));
+  view.append(panel("Ученик",el("div",{},el("h3",{style:"margin:0 0 8px;font-size:18px",text:s.name}),el("div",{class:"meta"},[s.subject,s.grade,(s.rate?money(s.rate)+"/зан":null),s.contact,s.parentContact?("родитель: "+s.parentContact):null].filter(Boolean).map(function(v){return el("span",{class:"chip",text:v});})),el("div",{class:"row-actions",style:"margin-top:10px"},el("button",{class:"btn btn-sm",onclick:function(){editFrom("students",s);}},"Редактировать"),el("button",{class:"btn btn-sm",onclick:function(){editFrom("lessons",{studentId:sid,status:"planned",date:todayIso()});}},"+ Занятие"),el("button",{class:"btn btn-sm",onclick:function(){editFrom("subs",{studentId:sid,kind:"занятий",date:todayIso()});}},"+ Абонемент"),el("button",{class:"btn btn-sm",onclick:function(){printParentReport(s);}},"PDF родителю"),el("button",{class:"btn btn-sm",onclick:function(){payDialog(s.id,null);}},"Оплата"),el("button",{class:"btn btn-sm",onclick:function(){payBefore(s.id);}},"Оплачено до даты"),el("button",{class:"btn btn-sm",onclick:function(){studentVacation(s);}},"Отпуск"),el("button",{class:"btn btn-sm",onclick:function(){studentPrice(s);}},"Новая цена"),s.archived?null:el("button",{class:"btn btn-sm btn-danger",onclick:function(){studentLeave(s);}},"Ушёл")))));
   view.append(panel("Сводка",el("div",{class:"stat-grid"},statBox("Занятий",String(lessons.length),false,"проведено: "+done.length),statBox("Получено",money(paid),true,"долг: "+money(debt)),statBox("Абонементов",String(subs.length)),statBox("Тренажёров",String(trainers.length)))));
   var ll;if(!lessons.length)ll=el("div",{class:"empty",style:"padding:16px"},el("div",{text:"Занятий нет"}));else{ll=el("div",{class:"list"});lessons.forEach(function(l){ll.append(el("div",{class:"rec",style:"cursor:pointer",onclick:function(){editFrom("lessons",l);}},el("div",{class:"rec-top"},el("h4",{style:"flex:1",text:(l.date||"")+(l.time?" "+l.time:"")+" "+(l.topic||"занятие")}),el("span",{class:"chip"+(l.status==="done"?" ok":""),text:(COL.lessons.slab[l.status])||l.status})),el("div",{class:"meta"},el("span",{class:"chip",text:l.coveredBySub?"абонемент":(l.cost?money(l.cost)+(l.paid?" v":" долг"):"—")}),l.grade?el("span",{class:"chip",text:"оценка "+l.grade}):null)));});}
   view.append(panel("Занятия",ll));
@@ -1662,6 +1698,7 @@ function renderDashboard(view){var s=computeStats();
     if(!items.length&&!dueTasks.length)body.append(el("div",{class:"empty",style:"padding:16px;margin-top:10px"},el("div",{text:"На сегодня дел нет"})));
     view.append(panel("Сегодня, "+today,body));})();
   view.append(panel("Деньги",el("div",{style:"display:flex;gap:11px;flex-wrap:wrap;align-items:stretch"},el("div",{style:"flex:1;min-width:260px"},el("div",{class:"stat-grid"},statBox("Доход с занятий",money(s.earned),true,"проведено: "+s.doneCnt),statBox("Получено с занятий",money(s.received),false,"долг: "+money(s.lessonDebt)),statBox("Абонементы",money(s.subPaid),false,"получено"),statBox("Заказы получено",money(s.oGot),false,"ожидается: "+money(s.oExp)),statBox("Заказы долг",money(s.orderDebt),s.orderDebt>0))),(function(){var b=statBox("Общий доход",money(s.totalPaid),true,"долг: "+money(s.totalDebt));b.setAttribute("style","width:200px;max-width:100%;display:flex;flex-direction:column;justify-content:center");return b;})())));
+  view.append(el("div",{class:"row-actions",style:"margin:-6px 0 12px"},el("button",{class:"btn btn-sm",onclick:function(){state.payTab="debts";go("payments");}},"Долги и оплаты")));
   view.append((function(){function dbox(label,inner){return el("div",{class:"panel",style:"flex:1;min-width:300px;margin-bottom:0"},el("span",{class:"lg",text:label}),inner);}return el("div",{style:"display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"},dbox("Занятия: оплачено и долг",donut(s.received,s.lessonDebt,"Оплачено","Долг")),dbox("Заказы: оплачено и долг",donut(s.oGot,s.orderDebt,"Оплачено","Долг")),dbox("Общая: оплачено и долг",donut(s.totalPaid,s.totalDebt,"Оплачено","Долг")));})());
   var lpName=function(id){return id==="__none"?"Без ученика":(refName("students",id,"name")||"Ученик");};
   var opName=function(id){if(String(id).indexOf("__o_")===0){var o=(state.cache.orders||[]).filter(function(x){return x.id===String(id).slice(4);})[0];return o?(o.topic||"заказ"):"заказ";}return refName("orderClients",id,"name")||"Клиент";};
