@@ -434,8 +434,96 @@ async function v2IcsData(env, key) {
   return data;
 }
 
+// ---------- Снимки облака ----------
+// Раз в день (первая синхронизация дня по Москве или cron) облако запоминает состояние всей базы.
+// Храним не копии целиком, а версии записей: версия живёт в снимках с first_day по last_day.
+// Первый снимок копирует всё, дальше добавляется только изменённое. Срок хранения 60 дней.
+const SNAP_KEEP_DAYS = 60;
+let SNAP_READY = false;
+async function snapEnsure(env) {
+  if (SNAP_READY) return;
+  await env.DB.batch([
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS snapvers (space TEXT NOT NULL, store TEXT NOT NULL, id TEXT NOT NULL, upd INTEGER NOT NULL, data TEXT, first_day TEXT NOT NULL, last_day TEXT NOT NULL, PRIMARY KEY (space, store, id, upd))"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS snapvers_by_last ON snapvers (space, last_day)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS snaps (space TEXT NOT NULL, label TEXT NOT NULL, at INTEGER NOT NULL, rev INTEGER, n INTEGER, bytes INTEGER, kind TEXT, PRIMARY KEY (space, label))"),
+  ]);
+  SNAP_READY = true;
+}
+function mskDay(ms) { return new Date((ms || Date.now()) + 3 * 3600000).toISOString().slice(0, 10); }
+function mskStamp(ms) { return new Date((ms || Date.now()) + 3 * 3600000).toISOString().slice(0, 19).replace("T", "~"); }
+async function snapTake(env, space, label, kind) {
+  await snapEnsure(env);
+  const now = Date.now(), cut = mskDay(now - SNAP_KEEP_DAYS * 86400000);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO snapvers (space, store, id, upd, data, first_day, last_day) SELECT space, store, id, upd, data, ?2, ?2 FROM recs WHERE space = ?1 AND del = 0 AND data IS NOT NULL " +
+      "ON CONFLICT (space, store, id, upd) DO UPDATE SET last_day = MAX(snapvers.last_day, excluded.last_day)").bind(space, label),
+    env.DB.prepare("INSERT INTO snaps (space, label, at, rev, n, bytes, kind) SELECT ?1, ?2, ?3, (SELECT rev FROM revs WHERE space = ?1), COUNT(*), COALESCE(SUM(length(data)), 0), ?4 FROM recs WHERE space = ?1 AND del = 0 " +
+      "ON CONFLICT (space, label) DO UPDATE SET at = excluded.at, rev = excluded.rev, n = excluded.n, bytes = excluded.bytes").bind(space, label, now, kind || "day"),
+    env.DB.prepare("DELETE FROM snaps WHERE space = ?1 AND label < ?2").bind(space, cut),
+    env.DB.prepare("DELETE FROM snapvers WHERE space = ?1 AND last_day < ?2").bind(space, cut),
+  ]);
+}
+// Снимок дня, если его ещё нет. Никогда не роняет основной запрос.
+async function snapMaybe(env, space) {
+  try {
+    await snapEnsure(env);
+    const day = mskDay();
+    const have = await env.DB.prepare("SELECT 1 AS x FROM snaps WHERE space = ?1 AND substr(label, 1, 10) = ?2 LIMIT 1").bind(space, day).first();
+    if (have) return false;
+    const any = await env.DB.prepare("SELECT 1 AS x FROM recs WHERE space = ?1 LIMIT 1").bind(space).first();
+    if (!any) return false;
+    await snapTake(env, space, day, "day");
+    return true;
+  } catch (e) { return false; }
+}
+async function snapList(env, space, cors) {
+  await snapEnsure(env);
+  const out = await env.DB.prepare("SELECT label, at, rev, n, bytes, kind FROM snaps WHERE space = ?1 ORDER BY label DESC").bind(space).all();
+  return json({ ok: true, keep: SNAP_KEEP_DAYS, snaps: (out && out.results) || [] }, 200, cors);
+}
+async function snapGet(url, env, space, cors) {
+  await snapEnsure(env);
+  const label = String(url.searchParams.get("label") || "");
+  const meta = await env.DB.prepare("SELECT label, at, n FROM snaps WHERE space = ?1 AND label = ?2").bind(space, label).first();
+  if (!meta) return json({ error: "no_such_snapshot" }, 404, cors);
+  const out = await env.DB.prepare("SELECT store, data FROM snapvers WHERE space = ?1 AND first_day <= ?2 AND last_day >= ?2 ORDER BY store, id").bind(space, label).all();
+  const by = {};
+  ((out && out.results) || []).forEach(function (x) { (by[x.store] = by[x.store] || []).push(x.data); });
+  const parts = Object.keys(by).map(function (k) { return JSON.stringify(k) + ":[" + by[k].join(",") + "]"; });
+  const body = '{"app":"shtab","version":"snapshot","snapshot":' + JSON.stringify(label) + ',"snapshotAt":' + Number(meta.at) +
+    ',"exportedAt":' + JSON.stringify(new Date().toISOString()) + ',"data":{' + parts.join(",") + "}}";
+  const h = Object.assign({ "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, cors || {});
+  return new Response(body, { status: 200, headers: h });
+}
+// Вернуть облако к снимку: всё из снимка получает свежую метку времени и побеждает на всех устройствах,
+// записи, которых в снимке не было, удаляются. Перед этим текущее состояние сохраняется отдельным снимком.
+async function snapRestore(request, env, space, cors) {
+  let body = null;
+  try { body = await request.json(); } catch (e) { body = null; }
+  if (!body || body.confirm !== "ВЕРНУТЬ") return json({ error: "need_confirm" }, 400, cors);
+  await v2Ensure(env); await snapEnsure(env);
+  const label = String(body.label || "");
+  const meta = await env.DB.prepare("SELECT label FROM snaps WHERE space = ?1 AND label = ?2").bind(space, label).first();
+  if (!meta) return json({ error: "no_such_snapshot" }, 404, cors);
+  const now = Date.now(), undo = mskStamp(now);
+  await snapTake(env, space, undo, "before-restore");
+  const res = await env.DB.batch([
+    env.DB.prepare("INSERT INTO revs (space, rev) VALUES (?1, 1) ON CONFLICT (space) DO UPDATE SET rev = rev + 1").bind(space),
+    env.DB.prepare("INSERT INTO recs (space, store, id, upd, del, rev, data) SELECT ?1, v.store, v.id, ?3, 0, (SELECT rev FROM revs WHERE space = ?1), v.data FROM snapvers v " +
+      "WHERE v.space = ?1 AND v.first_day <= ?2 AND v.last_day >= ?2 AND NOT EXISTS (SELECT 1 FROM recs r WHERE r.space = ?1 AND r.store = v.store AND r.id = v.id AND r.del = 0 AND r.data = v.data) " +
+      "ON CONFLICT (space, store, id) DO UPDATE SET upd = excluded.upd, del = 0, rev = excluded.rev, data = excluded.data").bind(space, label, now),
+    env.DB.prepare("UPDATE recs SET del = 1, data = NULL, upd = ?3, rev = (SELECT rev FROM revs WHERE space = ?1) WHERE space = ?1 AND del = 0 AND store <> 'settings' " +
+      "AND NOT EXISTS (SELECT 1 FROM snapvers v WHERE v.space = ?1 AND v.store = recs.store AND v.id = recs.id AND v.first_day <= ?2 AND v.last_day >= ?2)").bind(space, label, now),
+    env.DB.prepare("SELECT rev FROM revs WHERE space = ?1").bind(space),
+  ]);
+  const restored = (res[1] && res[1].meta && res[1].meta.changes) || 0;
+  const removed = (res[2] && res[2].meta && res[2].meta.changes) || 0;
+  const rev = (res[3] && res[3].results && res[3].results[0] && res[3].results[0].rev) || 0;
+  return json({ ok: true, label: label, restored: restored, removed: removed, undo: undo, rev: rev }, 200, cors);
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const cors = corsHeaders(env, request);
 
     if (request.method === "OPTIONS") {
@@ -523,13 +611,16 @@ export default {
       return new Response(audio, { status: 200, headers: h });
     }
 
-    if (url.pathname === "/v2/push" || url.pathname === "/v2/pull" || url.pathname === "/v2/stats") {
+    if (url.pathname === "/v2/push" || url.pathname === "/v2/pull" || url.pathname === "/v2/stats" || url.pathname === "/v2/snaps" || url.pathname === "/v2/snap" || url.pathname === "/v2/restore") {
       const sp = url.searchParams.get("space") || "";
       if (!KEY_RE.test(sp)) return json({ error: "bad_space_key" }, 400, cors);
       if (!env.DB) return json({ error: "db_not_bound" }, 500, cors);
       try {
-        if (url.pathname === "/v2/push" && request.method === "POST") return await v2Push(request, env, sp, cors);
-        if (url.pathname === "/v2/pull" && request.method === "GET") return await v2Pull(url, env, sp, cors);
+        if (url.pathname === "/v2/push" && request.method === "POST") { await snapMaybe(env, sp); return await v2Push(request, env, sp, cors); }
+        if (url.pathname === "/v2/pull" && request.method === "GET") { if (ctx && ctx.waitUntil) ctx.waitUntil(snapMaybe(env, sp)); return await v2Pull(url, env, sp, cors); }
+        if (url.pathname === "/v2/snaps" && request.method === "GET") return await snapList(env, sp, cors);
+        if (url.pathname === "/v2/snap" && request.method === "GET") return await snapGet(url, env, sp, cors);
+        if (url.pathname === "/v2/restore" && request.method === "POST") return await snapRestore(request, env, sp, cors);
         if (url.pathname === "/v2/stats" && request.method === "GET") return await v2Stats(env, sp, cors);
       } catch (e) {
         return json({ error: "db_error", detail: String((e && e.message) || e).slice(0, 300) }, 500, cors);
@@ -598,5 +689,15 @@ export default {
     }
 
     return json({ error: "method_not_allowed" }, 405, cors);
+  },
+
+  // Если в Cloudflare включён Cron Trigger, снимки делаются и без захода устройств.
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return;
+    try {
+      await v2Ensure(env);
+      const out = await env.DB.prepare("SELECT space FROM revs").all();
+      for (const r of ((out && out.results) || [])) await snapMaybe(env, r.space);
+    } catch (e) {}
   },
 };
