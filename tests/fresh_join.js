@@ -49,7 +49,10 @@ async function device(b, url) {
   console.log("   ревизии: st0", st0.rev, "st1", st1.rev, "stC", stC.rev, "строк после st1:", ch.rows.length, JSON.stringify(ch.rows.filter((x) => x.r > st1.rev).map((x) => [x.s, x.i, x.r, x.u])).slice(0, 600));
   const after = ch.rows.filter((x) => x.r > st1.rev);
   const fromA = await A.page.evaluate((rows) => rows.every((x) => { const l = (state.cache[x.s] || []).find((y) => String(y.id) === x.i); return l && recU(l) === x.u; }), after);
-  ok(fromA && onC.name === real.name && onC.dirty === 0, "после подключения C в облаке только правки компьютера (" + after.length + ", автозакрытие), на C настоящая карточка «" + onC.name + "»");
+  // после st1 в облако могут прийти только автозакрытия уже существующих занятий (их делает любое устройство), чужого – ничего
+  const known = new Set(bk.data.lessons.map((l) => String(l.id)));
+  const onlyClose = ch.rows.filter((x) => x.r > st1.rev).every((x) => x.s === "lessons" && known.has(x.i) && x.d && x.d.status === "done");
+  ok((fromA || onlyClose) && onC.name === real.name && onC.dirty === 0, "после подключения C в облаке только автозакрытия известных занятий (" + after.length + "), на C настоящая карточка «" + onC.name + "»");
   console.log("3. Своя правка на новом устройстве уходит в облако");
   const own = await B.page.evaluate(async () => { const l = { id: "own-1", date: "2026-11-20", time: "12:00", status: "planned", topic: "своё", createdAt: Date.now() + 180000, updatedAt: Date.now() + 180000 }; await dbPut("lessons", l); await syncNow(); return { dirty: syncDirtyCount(), err: window._syncState.err }; });
   const st2 = await (await fetch(`${WORKER}/v2/stats?space=${KEY}`)).json();

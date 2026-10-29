@@ -4,13 +4,20 @@
 const pw = require("playwright");
 const START = new Date(process.env.SHTAB_TEST_NOW || "2026-10-29T09:00:00Z");
 // метки времени, которые ставит сам тест в Node, идут по тем же часам, что и браузер
-const shift = START.getTime() - Date.now(), realNow = Date.now;
-Date.now = () => realNow() + shift;
+const realNow = Date.now, shift = START.getTime() - realNow();
+const shifted = () => realNow() + shift;
+Date.now = shifted;
 const launch = pw.chromium.launch.bind(pw.chromium);
 pw.chromium.launch = async (...args) => {
   const b = await launch(...args);
   const newContext = b.newContext.bind(b);
-  b.newContext = async (...o) => { const c = await newContext(...o); await c.clock.install({ time: new Date(Date.now()) }); return c; };
+  b.newContext = async (...o) => {
+    const c = await newContext(...o), t = shifted();
+    // Playwright сверяет часы страницы с Date.now в Node, поэтому на время установки он настоящий
+    Date.now = realNow;
+    try { await c.clock.install({ time: new Date(t) }); } finally { Date.now = shifted; }
+    return c;
+  };
   b.newPage = async (...o) => (await b.newContext(...o)).newPage();
   return b;
 };

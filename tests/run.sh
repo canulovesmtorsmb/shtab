@@ -23,11 +23,17 @@ for i in $(seq 90); do curl -sf http://127.0.0.1:8787/health >/dev/null && curl 
 export NODE_PATH="$T/node_modules"
 fail=0; failed=""
 run() { echo; echo "=== $1"; if ! "${@:2}"; then fail=$((fail+1)); failed="$failed $1"; fi; }
-for t in server-sync server-ics server-snapshots; do run "$t" node "$t.mjs" "$W/backup.json"; done
+# можно запустить только часть: bash tests/run.sh e2e snap_ui
+ONLY="$*"
+sel() { [ -z "$ONLY" ] && return 0; case " $ONLY " in *" $1 "*) return 0;; esac; return 1; }
+for t in server-sync server-ics server-snapshots; do
+  sel "$t" && run "$t" node "$t.mjs" "$W/backup.json"
+done
 cd "$W"
-for t in tz_view e2e link fresh_join sync_school import_safety student_actions schedule_tools snap_ui tz_autoclose; do
-  run "$t" node -r "$T/clock.cjs" "$t.js" backup.json
+for t in tz_view e2e link fresh_join sync_school import_safety student_actions schedule_tools snap_ui tz_autoclose merge_names; do
+  sel "$t" && run "$t" node -r "$T/clock.cjs" "$t.js" backup.json
 done
 echo
-if [ "$fail" = 0 ]; then echo "ВСЕ ПРОВЕРКИ ПРОШЛИ (13 наборов)"; else echo "ПРОВАЛЕНО НАБОРОВ: $fail –$failed"; fi
+label=" (14 наборов)"; [ -n "$ONLY" ] && label=" ($ONLY)"
+if [ "$fail" = 0 ]; then echo "ВСЕ ПРОВЕРКИ ПРОШЛИ$label"; else echo "ПРОВАЛЕНО НАБОРОВ: $fail –$failed"; fi
 exit "$fail"
