@@ -856,6 +856,26 @@ function studentMerge(s){var sel=el("select",{});sel.append(el("option",{value:"
   t.notes=(t.notes?t.notes+"\n":"")+"Объединён с карточкой «"+(s.name||"")+"» "+fmtDMY(todayIso())+".";t.updatedAt=now;
   s.archived=true;s.status="объединён";s.mergedInto=t.id;s.notes=(s.notes?s.notes+"\n":"")+"Объединён с «"+(t.name||"")+"».";s.updatedAt=now;
   ch.then(function(){return dbPut("students",t);}).then(function(){return dbPut("students",s);}).then(function(){return loadAll();}).then(function(){render();toast("Объединено, перенесено записей: "+moved);});}}]);}
+/* ---- проход 4: снимки облака ---- */
+var _snapCache=null;
+function snapLbl(x){var l=String((x&&x.label)||"");if(x&&x.at){var q=tzParts(Number(x.at),dispTz()||devTzName()||LESSON_TZ);if(q)return _p2(q.d)+"."+_p2(q.mo)+"."+q.y+" "+_p2(q.h)+":"+_p2(q.mi);}return fmtDMY(l.slice(0,10));}
+function snapPanel(c){var box=el("div",{}),info=el("div",{class:"note",text:"Загружаю список снимков…"});box.append(info);
+ if(!c||!c.key||!c.url){info.textContent="Снимки хранятся в облаке: сначала включите синхронизацию.";return box;}
+ var p=(_snapCache&&_snapCache.key===c.key&&Date.now()-_snapCache.at<60000)?Promise.resolve(_snapCache.res):syncFetch(c,"/v2/snaps",{method:"GET",headers:syncHeaders(c)}).then(function(res){_snapCache={key:c.key,at:Date.now(),res:res};return res;});
+ p.then(function(res){var arr=(res&&res.snaps)||[];
+  if(!arr.length){info.textContent="Снимков пока нет. Первый появится при следующей синхронизации.";return;}
+  info.textContent="Каждый день при первой синхронизации облако запоминает всю базу и хранит снимки "+(res.keep||60)+" дней. Последний: "+snapLbl(arr[0])+", записей "+arr[0].n+". Всего снимков: "+arr.length+".";
+  var sel=el("select",{});arr.forEach(function(x){sel.append(el("option",{value:x.label,text:snapLbl(x)+" – записей "+x.n+(x.kind==="before-restore"?" (перед откатом)":"")}));});
+  box.append(el("label",{class:"fld",style:"margin-top:8px"},el("span",{class:"l",text:"Снимок"}),sel),el("div",{class:"row-actions",style:"margin-top:7px"},
+   el("button",{class:"btn btn-sm",onclick:function(){snapDownload(c,sel.value);}},"Скачать файл"),
+   el("button",{class:"btn btn-sm btn-danger",onclick:function(){snapRestoreUi(c,sel.value,sel.options[sel.selectedIndex].text);}},"Вернуть облако к снимку…")));
+ }).catch(function(e){info.textContent="Снимки недоступны: "+((e&&e.message)||"нет связи")+".";});
+ return box;}
+function snapDownload(c,label){fetch(syncBase(c)+"/v2/snap?space="+encodeURIComponent(c.key)+"&label="+encodeURIComponent(label),{headers:syncHeaders(c)}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();}).then(function(b){var a=el("a",{href:URL.createObjectURL(b),download:"shtab-snapshot-"+String(label).replace(/[~:]/g,"-")+".json"});document.body.append(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(a.href);},3000);toast("Снимок скачан");}).catch(function(e){toast("Не удалось скачать: "+((e&&e.message)||"нет связи"));});}
+function snapRestoreUi(c,label,text){var inp=el("input",{type:"text",placeholder:"ВЕРНУТЬ"});
+ uiBox("Вернуть облако к снимку",el("div",{},el("div",{class:"note",style:"white-space:pre-wrap;margin-bottom:8px",text:"Снимок: "+text+".\n\nНа всех устройствах база станет такой, как в этом снимке: изменённое позже вернётся к прежнему виду, добавленное позже удалится. Перед откатом облако сохранит снимок текущего состояния, поэтому откат можно отменить тем же способом.\n\nЧтобы продолжить, напишите ВЕРНУТЬ."}),inp),
+  [{t:"Отмена",fn:uiClose},{t:"Вернуть",p:1,fn:function(){if(String(inp.value||"").trim().toUpperCase()!=="ВЕРНУТЬ"){toast("Напишите ВЕРНУТЬ");return;}uiClose();toast("Возвращаю облако…");_snapCache=null;
+   syncFetch(c,"/v2/restore",{method:"POST",headers:syncHeaders(c),body:JSON.stringify({label:label,confirm:"ВЕРНУТЬ"})}).then(function(res){return syncNow().then(function(){return loadAll();}).then(function(){render();uiBox("Облако возвращено",el("div",{class:"note",style:"white-space:pre-wrap",text:"Вернулось записей: "+res.restored+", удалено: "+res.removed+".\nДругие устройства получат это при следующей синхронизации.\nОтменить: выберите снимок «перед откатом» и верните облако к нему."}),[{t:"Понятно",p:1,fn:uiClose}]);});}).catch(function(e){toast("Откат не выполнен: "+((e&&e.message)||"нет связи"));});}}]);}
 function studentMenu(e,s){var deb=(typeof studDebt==="function")?studDebt(s.id):0;
  ctxMenu(e,[
   {t:"Открыть досье",fn:function(){openStudentModal(s);}},
@@ -1415,7 +1435,7 @@ function syncExtras(c){var box=el("div",{});
   el("div",{class:"row-actions"},el("button",{class:"btn btn-sm",onclick:pickBackupDir},localStorage.getItem("shtab-autobk")==="1"?"Сменить папку":"Выбрать папку"),
    el("button",{class:"btn btn-sm",onclick:function(){autoBackupRun(true);}},"Сохранить бэкап сейчас"),
    el("button",{class:"btn btn-sm",onclick:function(){localStorage.removeItem("shtab-autobk");toast("Автобэкап выключен");render();}},"Выключить")));
- return el("div",{},panel("Календарь по подписке (ICS)",box),panel("Автобэкап в папку",ab),panel("Корзина (30 дней)",t),
+ return el("div",{},panel("Календарь по подписке (ICS)",box),panel("Снимки облака",snapPanel(c)),panel("Автобэкап в папку",ab),panel("Корзина (30 дней)",t),
   panel("Проверка данных",el("div",{},el("button",{class:"btn btn-sm",onclick:integrityPanel},"Проверить целостность"))));}
 function tzCheck(){try{var cur="";try{cur=Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){}
  var saved=(state.settings&&state.settings.tzSaved)||"";
