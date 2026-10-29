@@ -307,6 +307,106 @@ async function handleAnalytics(env, space) {
   return out;
 }
 
+// --- Синхронизация v2: каждая запись хранится отдельной строкой ---
+// Причина: D1 не хранит строку длиннее 2 МБ, а база Штаба целиком весит больше.
+// Сервер хранит записи по одной, каждой записи присваивается номер ревизии.
+// Устройство отправляет только изменённые записи и забирает только то, что изменилось
+// после последней виденной ревизии. Слияние по записи: побеждает большая метка времени u,
+// при равной метке удаление сильнее записи.
+const V2_MAX_BODY = 1950000;     // байт в одном запросе на запись (предел D1 для строки 2 МБ)
+const V2_PAGE_BYTES = 800000;    // примерный объём одной страницы при чтении
+const V2_PAGE_ROWS = 400;
+let V2_READY = false;
+
+async function v2Ensure(env) {
+  if (V2_READY) return;
+  await env.DB.batch([
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS recs (space TEXT NOT NULL, store TEXT NOT NULL, id TEXT NOT NULL, upd INTEGER NOT NULL, del INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL, data TEXT, PRIMARY KEY (space, store, id))"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS recs_by_rev ON recs (space, rev, store, id)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS revs (space TEXT PRIMARY KEY, rev INTEGER NOT NULL)"),
+  ]);
+  V2_READY = true;
+}
+
+async function v2Active(env, space) {
+  try {
+    await v2Ensure(env);
+    const r = await env.DB.prepare("SELECT rev FROM revs WHERE space = ?").bind(space).first();
+    return !!r;
+  } catch (e) { return false; }
+}
+
+const V2_UPSERT =
+  "INSERT INTO recs (space, store, id, upd, del, rev, data) " +
+  "SELECT ?1, j.value ->> 's', CAST(j.value ->> 'i' AS TEXT), CAST(COALESCE(j.value ->> 'u', 0) AS INTEGER), " +
+  "CASE WHEN j.value ->> 'x' THEN 1 ELSE 0 END, (SELECT rev FROM revs WHERE space = ?1), " +
+  "CASE WHEN j.value ->> 'x' THEN NULL ELSE json_extract(j.value, '$.d') END " +
+  "FROM json_each(?2) AS j " +
+  "WHERE j.value ->> 's' IS NOT NULL AND length(j.value ->> 's') BETWEEN 1 AND 40 AND j.value ->> 'i' IS NOT NULL " +
+  "AND (j.value ->> 'x' OR json_type(j.value, '$.d') = 'object') " +
+  "ON CONFLICT (space, store, id) DO UPDATE SET upd = excluded.upd, del = excluded.del, rev = excluded.rev, data = excluded.data " +
+  "WHERE excluded.upd > recs.upd OR (excluded.upd = recs.upd AND excluded.del > recs.del)";
+
+async function v2Push(request, env, space, cors) {
+  const body = await request.text();
+  if (!body || body.charAt(0) !== "[") return json({ error: "bad_body" }, 400, cors);
+  const bytes = new TextEncoder().encode(body).length;
+  if (bytes > V2_MAX_BODY) return json({ error: "batch_too_large", bytes: bytes }, 413, cors);
+  await v2Ensure(env);
+  const res = await env.DB.batch([
+    env.DB.prepare("INSERT INTO revs (space, rev) VALUES (?1, 1) ON CONFLICT (space) DO UPDATE SET rev = rev + 1").bind(space),
+    env.DB.prepare(V2_UPSERT).bind(space, body),
+    env.DB.prepare("SELECT rev FROM revs WHERE space = ?1").bind(space),
+  ]);
+  const applied = (res[1] && res[1].meta && res[1].meta.changes) || 0;
+  const rev = (res[2] && res[2].results && res[2].results[0] && res[2].results[0].rev) || 0;
+  return json({ ok: true, applied: applied, rev: rev }, 200, cors);
+}
+
+async function v2Pull(url, env, space, cors) {
+  await v2Ensure(env);
+  const r = Math.max(0, parseInt(url.searchParams.get("r") || "0", 10) || 0);
+  const s = String(url.searchParams.get("s") || "");
+  const i = String(url.searchParams.get("i") || "");
+  const lim = Math.min(V2_PAGE_ROWS, Math.max(1, parseInt(url.searchParams.get("n") || String(V2_PAGE_ROWS), 10) || V2_PAGE_ROWS));
+  const sql =
+    "SELECT store, id, upd, del, rev, data FROM (" +
+    " SELECT store, id, upd, del, rev, data, SUM(COALESCE(length(data), 0) + 80) OVER (ORDER BY rev, store, id ROWS UNBOUNDED PRECEDING) AS cum" +
+    " FROM recs WHERE space = ?1 AND (rev > ?2 OR (rev = ?2 AND (store > ?3 OR (store = ?3 AND id > ?4))))" +
+    ") WHERE cum - (COALESCE(length(data), 0) + 80) < ?5 ORDER BY rev, store, id LIMIT ?6";
+  const out = await env.DB.prepare(sql).bind(space, r, s, i, V2_PAGE_BYTES, lim).all();
+  const rows = (out && out.results) || [];
+  // Ответ собирается строкой: data уже лежит в базе как JSON, разбирать и собирать его заново незачем.
+  const parts = rows.map(function (x) {
+    return '{"s":' + JSON.stringify(x.store) + ',"i":' + JSON.stringify(x.id) + ',"u":' + Number(x.upd) +
+      ',"x":' + (x.del ? 1 : 0) + ',"r":' + Number(x.rev) + ',"d":' + (x.del || !x.data ? "null" : x.data) + "}";
+  });
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const cur = last ? { r: Number(last.rev), s: last.store, i: last.id } : { r: r, s: s, i: i };
+  const bodyStr = '{"rows":[' + parts.join(",") + '],"more":' + (rows.length ? "true" : "false") + ',"cur":' + JSON.stringify(cur) + "}";
+  return new Response(bodyStr, { status: 200, headers: Object.assign({ "content-type": "application/json; charset=utf-8" }, cors || {}) });
+}
+
+async function v2Stats(env, space, cors) {
+  await v2Ensure(env);
+  const res = await env.DB.batch([
+    env.DB.prepare("SELECT store, SUM(CASE WHEN del = 0 THEN 1 ELSE 0 END) AS live, SUM(del) AS dead FROM recs WHERE space = ?1 GROUP BY store").bind(space),
+    env.DB.prepare("SELECT rev FROM revs WHERE space = ?1").bind(space),
+  ]);
+  const counts = {}, dead = {};
+  ((res[0] && res[0].results) || []).forEach(function (x) { counts[x.store] = Number(x.live) || 0; dead[x.store] = Number(x.dead) || 0; });
+  const rv = (res[1] && res[1].results && res[1].results[0]) ? Number(res[1].results[0].rev) : 0;
+  return json({ ok: true, counts: counts, tombstones: dead, rev: rv }, 200, cors);
+}
+
+async function v2IcsData(env, key) {
+  if (!(await v2Active(env, key))) return null;
+  const out = await env.DB.prepare("SELECT store, data FROM recs WHERE space = ?1 AND del = 0 AND store IN ('lessons','events','students')").bind(key).all();
+  const data = { lessons: [], events: [], students: [] };
+  ((out && out.results) || []).forEach(function (x) { try { data[x.store].push(JSON.parse(x.data)); } catch (e) {} });
+  return data;
+}
+
 export default {
   async fetch(request, env) {
     const cors = corsHeaders(env, request);
@@ -331,9 +431,11 @@ export default {
       const key = url.searchParams.get("key") || "";
       if (!key || key.length < 8) return new Response("bad key", { status: 400, headers: cors });
       if (!env.DB) return new Response("db", { status: 500, headers: cors });
-      const row = await env.DB.prepare("SELECT data FROM spaces WHERE key = ?").bind(key).first();
-      let data = null;
-      try { data = row ? JSON.parse(row.data) : null; } catch (e) { data = null; }
+      let data = await v2IcsData(env, key);
+      if (!data) {
+        const row = await env.DB.prepare("SELECT data FROM spaces WHERE key = ?").bind(key).first();
+        try { data = row ? JSON.parse(row.data) : null; } catch (e) { data = null; }
+      }
       if (data && data.__deleted) delete data.__deleted;
       const body = icsFromState(data || {});
       const h = Object.assign({}, cors, { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "max-age=600" });
@@ -394,6 +496,20 @@ export default {
       return new Response(audio, { status: 200, headers: h });
     }
 
+    if (url.pathname === "/v2/push" || url.pathname === "/v2/pull" || url.pathname === "/v2/stats") {
+      const sp = url.searchParams.get("space") || "";
+      if (!KEY_RE.test(sp)) return json({ error: "bad_space_key" }, 400, cors);
+      if (!env.DB) return json({ error: "db_not_bound" }, 500, cors);
+      try {
+        if (url.pathname === "/v2/push" && request.method === "POST") return await v2Push(request, env, sp, cors);
+        if (url.pathname === "/v2/pull" && request.method === "GET") return await v2Pull(url, env, sp, cors);
+        if (url.pathname === "/v2/stats" && request.method === "GET") return await v2Stats(env, sp, cors);
+      } catch (e) {
+        return json({ error: "db_error", detail: String((e && e.message) || e).slice(0, 300) }, 500, cors);
+      }
+      return json({ error: "method_not_allowed" }, 405, cors);
+    }
+
     if (url.pathname !== "/state") {
       return json({ error: "not_found" }, 404, cors);
     }
@@ -405,6 +521,13 @@ export default {
 
     if (!env.DB) {
       return json({ error: "db_not_bound" }, 500, cors);
+    }
+
+    // Пространство уже переведено на v2: старый снимок целиком больше не отдаём и не принимаем,
+    // иначе устаревшая версия приложения затрёт свежую базу на устройстве июльской копией.
+    if (await v2Active(env, space)) {
+      if (request.method === "GET") return json({ data: null, updatedAt: 0, upgraded: true }, 200, cors);
+      return json({ error: "upgraded" }, 409, cors);
     }
 
     if (request.method === "GET") {
